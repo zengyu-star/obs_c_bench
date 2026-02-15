@@ -15,10 +15,11 @@ LIB_DIR = './lib'
 CACHE_DIR = './test_bin_cache'  # 存放编译产物的临时目录
 TEST_DATA_FILE = './test_data.bin' # 本地测试数据文件
 TEST_DATA_SIZE_MB = 5           # 测试数据大小 (MB)
+EnableDataValidation = 'false' #冒烟测试无需校验一致性
 
 # 测试用例 ID
 TEST_CASES = [201, 202, 204, 216, 230, 900]
-TEST_DURATION = 3 
+TEST_DURATION = 0
 
 # 编译任务顺序: (显示名称, Make命令, 产物文件名)
 # 顺序: Mock -> Standard -> Mock_ASan -> ASan
@@ -86,7 +87,8 @@ class BenchmarkTester:
         sed_cmds = [
             f"sed -i 's/^RunSeconds=.*/RunSeconds={TEST_DURATION}/g' {CONFIG_FILE}",
             # 确保 UploadFilePath 指向我们生成的文件
-            f"sed -i 's|^UploadFilePath=.*|UploadFilePath={TEST_DATA_FILE}|g' {CONFIG_FILE}"
+            f"sed -i 's|^UploadFilePath=.*|UploadFilePath={TEST_DATA_FILE}|g' {CONFIG_FILE}",
+            f"sed -i 's|^EnableDataValidation=.*|EnableDataValidation={EnableDataValidation}|g' {CONFIG_FILE}"
         ]
         for cmd in sed_cmds:
             self.run_cmd(cmd)

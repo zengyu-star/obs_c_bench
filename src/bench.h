@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <sys/time.h>
+#include <stdbool.h>
 #include "log.h" 
 
 #ifdef MOCK_SDK_MODE
@@ -18,16 +19,15 @@
 #endif
 
 // TestCase 编号定义
-#define TEST_CASE_PUT           201  // 上传对象
-#define TEST_CASE_GET           202  // 下载对象
-#define TEST_CASE_DELETE        204  // 删除对象
-#define TEST_CASE_MULTIPART     216  // 多段上传
-#define TEST_CASE_RESUMABLE     230  // 断点续传上传
-#define TEST_CASE_MIX           900  // 混合操作模式
+#define TEST_CASE_PUT           201
+#define TEST_CASE_GET           202
+#define TEST_CASE_DELETE        204
+#define TEST_CASE_MULTIPART     216
+#define TEST_CASE_RESUMABLE     230
+#define TEST_CASE_MIX           900
 
 #define MAX_MIX_OPS 32 
 
-// 单个用户信息结构
 typedef struct {
     char username[64];
     char ak[128];
@@ -40,17 +40,17 @@ typedef struct {
     int keep_alive;
 
     // --- 并发与用户配置 ---
-    int threads;                // 总线程数 (计算得出)
-    int target_user_count;      // config: Users
-    int threads_per_user;       // config: ThreadsPerUser
-    char bucket_name_prefix[64];// config: BucketNamePrefix
-    char bucket_name_fixed[128];// config: BucketNameFixed
+    int threads;
+    int target_user_count;
+    int threads_per_user;
+    char bucket_name_prefix[64];
+    char bucket_name_fixed[128];
 
-    // --- 用户列表数据 ---
+    // --- 用户列表 ---
     UserCredential *user_list;
     int loaded_user_count;
 
-    // --- 测试计划配置 ---
+    // --- 测试计划 ---
     int requests_per_thread; 
     int test_case; 
     long long object_size;
@@ -61,34 +61,27 @@ typedef struct {
     LogLevel log_level;
     int obj_name_pattern_hash; 
 
-    // --- 断点续传配置 ---
+    // --- 断点续传 ---
     int enable_checkpoint;      
     char upload_file_path[256]; 
 
-    // --- 混合操作配置 ---
+    // --- 混合操作 ---
     int mix_ops[MAX_MIX_OPS];  
     int mix_op_count;          
     long long mix_loop_count;  
     int use_mix_mode;          
 
-    // --- [新增] 安全与国密配置 ---
-    // config: GmModeSwitch (0=false/CLOSE, 1=true/OPEN)
+    // --- 安全配置 ---
     int gm_mode_switch;
-    
-    // config: SslMinVersion / SslMaxVersion
-    // 存储映射后的 CURL_SSLVERSION 常量值
     long ssl_min_version;
     long ssl_max_version;
-
-    // config: MutualSslSwitch (0=false/CLOSE, 1=true/OPEN)
     int mutual_ssl_switch;
-    
-    // config: ClientCertPath
     char client_cert_path[256];
-    // config: ClientKeyPath
     char client_key_path[256];
-    // config: ClientKeyPassword
     char client_key_password[256];
+
+    // [新增] 数据校验开关
+    int enable_data_validation;
 
 } Config;
 
@@ -100,6 +93,10 @@ typedef struct {
     long long fail_4xx_other_count; 
     long long fail_5xx_count;   
     long long fail_other_count; 
+    
+    // [新增] 校验失败计数
+    long long fail_validation_count;
+
     double total_latency_ms;
     double max_latency_ms;
     double min_latency_ms;
@@ -112,16 +109,23 @@ typedef struct {
     char *data_buffer; 
     double stop_timestamp_ms;
 
-    // 线程专属的生效配置
     char effective_ak[128];
     char effective_sk[128];
     char effective_bucket[128];
     char username[64];
+    
+    // [新增] 线程级预计算的环形模式缓冲区
+    char *pattern_buffer;       
+    long long pattern_size;     
+    long long pattern_mask;     
 } WorkerArgs;
 
 // 函数声明
 int load_config(const char *filename, Config *cfg);
 void *worker_routine(void *arg);
+
+// [新增] 公共算法函数
+void fill_pattern_buffer(char *buf, size_t size, int seed);
 
 obs_status run_put_benchmark(WorkerArgs *args, char *key);
 obs_status run_get_benchmark(WorkerArgs *args, char *key);
