@@ -27,6 +27,7 @@
 #define TEST_CASE_MIX           900
 
 #define MAX_MIX_OPS 32 
+#define MAX_RANGE_OPTIONS 64 
 
 typedef struct {
     char username[64];
@@ -54,11 +55,15 @@ typedef struct {
     int requests_per_thread; 
     int test_case; 
     
-    // [修改] 支持对象大小范围
-    long long object_size;      // 兼容旧逻辑（显示用）
-    long long object_size_min;  // 范围下限
-    long long object_size_max;  // 范围上限
-    int is_dynamic_size;        // 是否为动态大小
+    // --- 对象大小配置 ---
+    long long object_size;      
+    long long object_size_min;  
+    long long object_size_max;  
+    int is_dynamic_size;        
+
+    // --- Range 下载配置 ---
+    char *range_options[MAX_RANGE_OPTIONS];
+    int range_count;
 
     long long part_size;
     char key_prefix[64];
@@ -93,16 +98,17 @@ typedef struct {
 
 typedef struct {
     long long success_count;    
-    long long fail_403_count;   
-    long long fail_404_count;   
-    long long fail_409_count;   
-    long long fail_4xx_other_count; 
-    long long fail_5xx_count;   
-    long long fail_other_count; 
-    long long fail_validation_count;
+    
+    // [详细错误统计]
+    long long fail_403_count;   // Forbidden
+    long long fail_404_count;   // NotFound
+    long long fail_409_count;   // Conflict/AlreadyExists
+    long long fail_4xx_other_count; // 其他客户端错误
+    long long fail_5xx_count;   // 服务端错误
+    long long fail_other_count; // 网络/SDK通用错误
+    long long fail_validation_count; // 数据校验错误 (DataConsistencyError)
 
-    // [新增] 累计成功传输的字节数（用于精确计算吞吐量）
-    long long total_success_bytes;
+    long long total_success_bytes; // 累计流量
 
     double total_latency_ms;
     double max_latency_ms;
@@ -131,9 +137,15 @@ int load_config(const char *filename, Config *cfg);
 void *worker_routine(void *arg);
 void fill_pattern_buffer(char *buf, size_t size, int seed);
 
-// [修改] run_put_benchmark 增加 size 参数
+// 报告函数声明
+void save_benchmark_report(Config *cfg, long long total, 
+                           long long success, long long fail, 
+                           long long f403, long long f404, long long f409, long long f4other,
+                           long long f5xx, long long fother, long long fvalidate,
+                           double tps, double throughput);
+
 obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size);
-obs_status run_get_benchmark(WorkerArgs *args, char *key);
+obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str);
 obs_status run_delete_benchmark(WorkerArgs *args, char *key);
 obs_status run_list_benchmark(WorkerArgs *args);
 obs_status run_multipart_benchmark(WorkerArgs *args, char *key);

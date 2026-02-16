@@ -13,10 +13,24 @@
 #endif
 #define OBS_SSLVERSION_TLSv1_3 ((1 << 16) | 3)
 
-static void trim(char *s) {
-    char *p = s;
-    int l = strlen(p);
-    while(l > 0 && (p[l-1] == '\r' || p[l-1] == '\n' || p[l-1] == ' ')) p[--l] = 0;
+// [修改] 辅助函数：去除字符串首尾的空白字符
+static char* trim_both(char *s) {
+    if (!s) return NULL;
+    
+    // 1. 去除尾部空白
+    char *end = s + strlen(s) - 1;
+    while (end > s && isspace((unsigned char)*end)) {
+        *end = '\0';
+        end--;
+    }
+    
+    // 2. 去除首部空白
+    char *start = s;
+    while (*start && isspace((unsigned char)*start)) {
+        start++;
+    }
+    
+    return start; // 返回新的起始指针
 }
 
 static int parse_mix_ops(const char *val, int *ops, int max_ops) {
@@ -25,8 +39,13 @@ static int parse_mix_ops(const char *val, int *ops, int max_ops) {
     if (!temp) return 0;
     char *token = strtok(temp, ",");
     while (token != NULL && count < max_ops) {
-        while(isspace((unsigned char)*token)) token++;
-        int op = atoi(token);
+        // [修改] 增加 token trim
+        char *clean_token = trim_both(token);
+        if (strlen(clean_token) == 0) {
+             token = strtok(NULL, ",");
+             continue;
+        }
+        int op = atoi(clean_token);
         if (op == TEST_CASE_MIX) {
             token = strtok(NULL, ",");
             continue;
@@ -52,14 +71,21 @@ static int load_users_file(const char *filename, Config *cfg) {
     char line[512];
     int count = 0;
     while (fgets(line, sizeof(line), fp) && count < cfg->target_user_count) {
-        if (line[0] == '#' || line[0] == '\r' || line[0] == '\n') continue;
-        trim(line);
-        char *token = strtok(line, ",");
-        if(token) strcpy(cfg->user_list[count].username, token); else continue;
+        char *clean_line = trim_both(line);
+        if (clean_line[0] == '#' || strlen(clean_line) == 0) continue;
+        
+        char *token = strtok(clean_line, ",");
+        if(token) strcpy(cfg->user_list[count].username, trim_both(token)); 
+        else continue;
+
         token = strtok(NULL, ",");
-        if(token) strcpy(cfg->user_list[count].ak, token); else continue;
+        if(token) strcpy(cfg->user_list[count].ak, trim_both(token)); 
+        else continue;
+
         token = strtok(NULL, ",");
-        if(token) strcpy(cfg->user_list[count].sk, token); else continue;
+        if(token) strcpy(cfg->user_list[count].sk, trim_both(token)); 
+        else continue;
+
         count++;
     }
     fclose(fp);
@@ -86,6 +112,7 @@ int load_config(const char *filename, Config *cfg) {
         return -1;
     }
     
+    // 默认值设置
     strcpy(cfg->protocol, "https");
     cfg->keep_alive = 1;
     cfg->part_size = 5 * 1024 * 1024;
@@ -109,28 +136,37 @@ int load_config(const char *filename, Config *cfg) {
     cfg->client_key_password[0] = '\0';
     cfg->enable_data_validation = 0;
     
-    // 默认大小，后续会被覆盖
     cfg->object_size_min = cfg->object_size_max = 1024;
     cfg->is_dynamic_size = 0;
+    
+    cfg->range_count = 0;
+    for(int i=0; i<MAX_RANGE_OPTIONS; i++) cfg->range_options[i] = NULL;
 
     char ssl_min_str[16] = {0};
     char ssl_max_str[16] = {0};
     char line[512];
 
     while (fgets(line, sizeof(line), fp)) {
-        if (line[0] == '#' || line[0] == '[' || line[0] == '\r' || line[0] == '\n') continue;
-        char *eq = strchr(line, '=');
+        // [修改] 先清洗整行
+        char *clean_line = trim_both(line);
+        if (clean_line[0] == '#' || clean_line[0] == '[' || strlen(clean_line) == 0) continue;
+
+        char *eq = strchr(clean_line, '=');
         if (!eq) continue;
         *eq = '\0';
-        char *key = line;
-        char *val = eq + 1;
-        trim(val);
+        
+        // [关键修改] 同时清洗 Key 和 Value，消除空格影响
+        char *key = trim_both(clean_line);
+        char *val = trim_both(eq + 1);
 
         if (strcmp(key, "Endpoint") == 0) strcpy(cfg->endpoint, val);
         else if (strcmp(key, "Protocol") == 0) strcpy(cfg->protocol, val);
         else if (strcmp(key, "KeepAlive") == 0) cfg->keep_alive = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "LogLevel") == 0) cfg->log_level = log_level_from_string(val);
+        
+        // [修正点] 现在 val 已经被 trim 过了，" true" 会变成 "true"，strcasecmp 能正确识别
         else if (strcmp(key, "ObjNamePatternHash") == 0) cfg->obj_name_pattern_hash = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
+        
         else if (strcmp(key, "EnableCheckpoint") == 0) cfg->enable_checkpoint = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "UploadFilePath") == 0) strcpy(cfg->upload_file_path, val);
         else if (strcmp(key, "BucketNamePrefix") == 0) strcpy(cfg->bucket_name_prefix, val);
@@ -140,28 +176,41 @@ int load_config(const char *filename, Config *cfg) {
         else if (strcmp(key, "RequestsPerThread") == 0) cfg->requests_per_thread = atoi(val);
         else if (strcmp(key, "TestCase") == 0) cfg->test_case = atoi(val);
         
-        // [修改] 解析 ObjectSize 支持范围 (e.g. 1024~2048)
         else if (strcmp(key, "ObjectSize") == 0) {
             char *tilde = strchr(val, '~');
             if (tilde) {
                 *tilde = '\0';
                 cfg->object_size_min = atoll(val);
                 cfg->object_size_max = atoll(tilde + 1);
-
-                // [新增] 校验逻辑：左边界必须 <= 右边界
                 if (cfg->object_size_min > cfg->object_size_max) {
-                    printf("[Config Error] Invalid ObjectSize range: min (%lld) > max (%lld). Left boundary must be <= Right boundary.\n", 
+                    printf("[Config Error] Invalid ObjectSize range: min (%lld) > max (%lld).\n", 
                            cfg->object_size_min, cfg->object_size_max);
-                    fclose(fp); 
-                    return -1; // 返回错误码，主程序将退出
+                    fclose(fp); return -1;
                 }
-
                 cfg->is_dynamic_size = 1;
-                cfg->object_size = cfg->object_size_max; // 兼容显示
+                cfg->object_size = cfg->object_size_max; 
             } else {
                 cfg->object_size_min = cfg->object_size_max = atoll(val);
                 cfg->is_dynamic_size = 0;
                 cfg->object_size = cfg->object_size_max;
+            }
+        }
+        
+        else if (strcmp(key, "Range") == 0) {
+            char *temp = strdup(val);
+            if (temp) {
+                char *token = strtok(temp, ";");
+                int idx = 0;
+                while (token != NULL && idx < MAX_RANGE_OPTIONS) {
+                    char *clean_token = trim_both(token);
+                    if (strlen(clean_token) > 0) {
+                        cfg->range_options[idx] = strdup(clean_token);
+                        idx++;
+                    }
+                    token = strtok(NULL, ";");
+                }
+                cfg->range_count = idx;
+                free(temp);
             }
         }
 

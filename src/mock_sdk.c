@@ -12,6 +12,9 @@ static long long mock_part_calls = 0;
 static long long mock_complete_calls = 0;
 static long long mock_upload_file_calls = 0;
 
+// 定义虚拟对象大小 100MB
+#define MOCK_VIRTUAL_OBJECT_SIZE (100 * 1024 * 1024)
+
 obs_status obs_initialize(int flags) { return OBS_STATUS_OK; }
 void obs_deinitialize() {}
 const char* obs_get_status_name(obs_status status) { return "OK"; }
@@ -54,19 +57,46 @@ void get_object(const obs_options *options, obs_object_info *object_info,
 {
     __sync_fetch_and_add(&mock_get_calls, 1);
     
+    // [修改] Range 下载逻辑模拟
+    uint64_t start = 0;
+    uint64_t length_to_send = 8192; // 默认大小
+
+    if (get_conditions) {
+        start = get_conditions->start_byte;
+        if (get_conditions->byte_count > 0) {
+            // 指定了长度 (0-9)
+            length_to_send = get_conditions->byte_count;
+        } else {
+            // 读取到末尾 (9-)
+            if (start < MOCK_VIRTUAL_OBJECT_SIZE) {
+                length_to_send = MOCK_VIRTUAL_OBJECT_SIZE - start;
+            } else {
+                length_to_send = 0;
+            }
+        }
+    } else {
+        // 无 Range，下载默认大小，比如 1MB，避免 Mock 压测太慢
+        length_to_send = 1024 * 1024; 
+    }
+
     if (handler->response_handler.properties_callback) {
         obs_response_properties props;
         memset(&props, 0, sizeof(props));
         props.etag = "mock-etag-download";
-        // [新增] Mock 默认传输 8192 字节
-        props.content_length = 8192; 
+        props.content_length = length_to_send; 
         handler->response_handler.properties_callback(&props, callback_data);
     }
 
-    if (handler->get_object_data_callback) {
+    if (handler->get_object_data_callback && length_to_send > 0) {
         char buf[8192];
         memset(buf, 'A', sizeof(buf));
-        handler->get_object_data_callback(sizeof(buf), buf, callback_data);
+        
+        uint64_t remaining = length_to_send;
+        while (remaining > 0) {
+            int chunk_size = (remaining > sizeof(buf)) ? sizeof(buf) : (int)remaining;
+            handler->get_object_data_callback(chunk_size, buf, callback_data);
+            remaining -= chunk_size;
+        }
     }
     if (handler->response_handler.complete_callback) {
         handler->response_handler.complete_callback(OBS_STATUS_OK, NULL, callback_data);

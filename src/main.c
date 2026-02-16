@@ -17,6 +17,7 @@ const char* log_level_to_string(LogLevel level) {
     }
 }
 
+// [修改] 报告输出增加 DataConsistencyError 字段
 void save_benchmark_report(Config *cfg, long long total, 
                            long long success, long long fail, 
                            long long f403, long long f404, long long f409, long long f4other,
@@ -37,26 +38,71 @@ void save_benchmark_report(Config *cfg, long long total,
     FILE *fp = fopen(filepath, "w");
     if (!fp) return;
 
-    fprintf(fp, "=== OBS C SDK Benchmark Report ===\n");
-    fprintf(fp, "Execution Time: %04d-%02d-%02d %02d:%02d:%02d\n",
+    fprintf(fp, "===========================================\n");
+    fprintf(fp, "      OBS C SDK Benchmark Execution Report \n");
+    fprintf(fp, "===========================================\n");
+    fprintf(fp, "Execution Time:      %04d-%02d-%02d %02d:%02d:%02d\n",
             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec);
-    fprintf(fp, "Endpoint: %s\n", cfg->endpoint);
-    fprintf(fp, "Threads: %d\n", cfg->threads);
-    fprintf(fp, "TestCase: %d\n", cfg->test_case);
-    fprintf(fp, "Validation: %s\n", cfg->enable_data_validation ? "Enabled" : "Disabled");
-    if (cfg->is_dynamic_size) {
-        fprintf(fp, "ObjectSize: %lld ~ %lld (Dynamic)\n", cfg->object_size_min, cfg->object_size_max);
+    
+    fprintf(fp, "---------------- Configuration ----------------\n");
+    fprintf(fp, "[Environment]\n");
+    fprintf(fp, "  Endpoint:          %s\n", cfg->endpoint);
+    if(cfg->threads > 0) fprintf(fp, "  Bucket(Prefix):    %s\n", cfg->bucket_name_prefix);
+    
+    fprintf(fp, "[Network]\n");
+    fprintf(fp, "  Protocol:          %s\n", cfg->protocol);
+    fprintf(fp, "  KeepAlive:         %s\n", cfg->keep_alive ? "true" : "false");
+    
+    fprintf(fp, "[TestPlan - General]\n");
+    fprintf(fp, "  Threads:           %d\n", cfg->threads);
+    fprintf(fp, "  RunSeconds:        %d %s\n", cfg->run_seconds, cfg->run_seconds > 0 ? "(Time Limited)" : "(No Limit)");
+    fprintf(fp, "  LogLevel:          %s\n", log_level_to_string(cfg->log_level));
+    fprintf(fp, "  Validation:        %s\n", cfg->enable_data_validation ? "Enabled" : "Disabled");
+    
+    fprintf(fp, "[TestPlan - Mode]\n");
+    if (cfg->use_mix_mode) {
+        fprintf(fp, "  Mode:              Mixed Operation (900)\n");
+        fprintf(fp, "  MixLoopCount:      %lld\n", cfg->mix_loop_count);
+        fprintf(fp, "  MixOperation:      ");
+        for(int i=0; i<cfg->mix_op_count; i++) {
+            fprintf(fp, "%d%s", cfg->mix_ops[i], (i < cfg->mix_op_count - 1) ? "," : "");
+        }
+        fprintf(fp, "\n");
     } else {
-        fprintf(fp, "ObjectSize: %lld (Fixed)\n", cfg->object_size_max);
+        fprintf(fp, "  Mode:              Standard Case\n");
+        fprintf(fp, "  TestCase:          %d\n", cfg->test_case);
+        fprintf(fp, "  RequestsPerThread: %d\n", cfg->requests_per_thread);
+    }
+
+    fprintf(fp, "[TestPlan - Object]\n");
+    if (cfg->is_dynamic_size) {
+        fprintf(fp, "  ObjectSize:        %lld ~ %lld bytes (Dynamic)\n", cfg->object_size_min, cfg->object_size_max);
+    } else {
+        fprintf(fp, "  ObjectSize:        %lld bytes (Fixed)\n", cfg->object_size_max);
     }
     
-    fprintf(fp, "\n--- Statistics ---\n");
-    fprintf(fp, "Total Requests: %lld\n", total);
-    fprintf(fp, "Success: %lld\n", success);
-    fprintf(fp, "Failed: %lld\n", fail);
-    if (fvalidate > 0) fprintf(fp, "  [!] Validation Fails: %lld\n", fvalidate);
-    fprintf(fp, "TPS: %.2f\n", tps);
-    fprintf(fp, "Throughput: %.2f MB/s\n", throughput);
+    if (cfg->range_count > 0) {
+        fprintf(fp, "  RangeOptions:      %d defined\n", cfg->range_count);
+    }
+
+    fprintf(fp, "---------------- Statistics -------------------\n");
+    fprintf(fp, "Total Requests:      %lld\n", total);
+    fprintf(fp, "Success:             %lld\n", success);
+    fprintf(fp, "Failed:              %lld\n", fail);
+    fprintf(fp, "  |- 403 (Forbidden):  %lld\n", f403);
+    fprintf(fp, "  |- 404 (NotFound):   %lld\n", f404);
+    fprintf(fp, "  |- 409 (Conflict):   %lld\n", f409);
+    fprintf(fp, "  |- 4xx (Other):      %lld\n", f4other);
+    fprintf(fp, "  |- 5xx (Server):     %lld\n", f5xx);
+    fprintf(fp, "  |- Other (Net/SDK):  %lld\n", fother);
+    // [新增] DataConsistencyError
+    fprintf(fp, "  |- Other (DataConsistencyError):  %lld\n", fvalidate);
+    
+    fprintf(fp, "\nPerformance:\n");
+    fprintf(fp, "  TPS:                 %.2f\n", tps);
+    fprintf(fp, "  Throughput:          %.2f MB/s\n", throughput);
+    fprintf(fp, "===========================================\n");
+
     fclose(fp);
     LOG_INFO("Execution report saved to: %s", filepath);
 }
@@ -163,7 +209,7 @@ int main(int argc, char **argv) {
     if (cfg.run_seconds > 0) {
         stop_ms = current_ms + (cfg.run_seconds * 1000.0);
     } else {
-        stop_ms = current_ms + (100LL * 365 * 24 * 3600 * 1000.0);
+        stop_ms = 1e15; 
     }
 
     pthread_t *tids = (pthread_t *)malloc(cfg.threads * sizeof(pthread_t));
@@ -176,14 +222,27 @@ int main(int argc, char **argv) {
     for (int u = 0; u < cfg.loaded_user_count; u++) {
         UserCredential *curr_user = &cfg.user_list[u];
         char target_bucket[256]; 
-        if (strlen(cfg.bucket_name_fixed) > 0) strcpy(target_bucket, cfg.bucket_name_fixed);
-        else {
+        
+        // 智能桶名生成
+        if (strlen(cfg.bucket_name_fixed) > 0) {
+            strcpy(target_bucket, cfg.bucket_name_fixed);
+        } else {
             char ak_lower[128];
-            str_tolower(ak_lower, curr_user->ak);
-            if (strlen(cfg.bucket_name_prefix) > 0)
+            if (strlen(curr_user->ak) > 0) {
+                str_tolower(ak_lower, curr_user->ak);
+            } else {
+                ak_lower[0] = '\0';
+            }
+
+            if (strlen(ak_lower) > 0 && strlen(cfg.bucket_name_prefix) > 0) {
                 snprintf(target_bucket, sizeof(target_bucket), "%s.%s", ak_lower, cfg.bucket_name_prefix);
-            else 
+            } else if (strlen(ak_lower) > 0) {
                 snprintf(target_bucket, sizeof(target_bucket), "%s", ak_lower);
+            } else if (strlen(cfg.bucket_name_prefix) > 0) {
+                snprintf(target_bucket, sizeof(target_bucket), "%s", cfg.bucket_name_prefix);
+            } else {
+                strcpy(target_bucket, "default-bench-bucket");
+            }
         }
 
         for (int t = 0; t < cfg.threads_per_user; t++) {
@@ -207,12 +266,12 @@ int main(int argc, char **argv) {
     gettimeofday(&end_tv, NULL);
     double actual_time_s = (end_tv.tv_sec - start_tv.tv_sec) + (end_tv.tv_usec - start_tv.tv_usec) / 1000000.0;
 
-    long long total_success = 0, total_fail = 0, total_bytes = 0;
+    long long total_success = 0;
     long long t_403=0, t_404=0, t_409=0, t_4xx=0, t_5xx=0, t_other=0, t_val=0;
+    long long total_bytes = 0;
 
     for (int i = 0; i < cfg.threads; i++) {
         total_success += t_args[i].stats.success_count;
-        // [新增] 累加所有线程的真实传输字节数
         total_bytes += t_args[i].stats.total_success_bytes;
         
         t_403 += t_args[i].stats.fail_403_count;
@@ -221,21 +280,30 @@ int main(int argc, char **argv) {
         t_4xx += t_args[i].stats.fail_4xx_other_count;
         t_5xx += t_args[i].stats.fail_5xx_count;
         t_other += t_args[i].stats.fail_other_count;
-        t_val += t_args[i].stats.fail_validation_count;
+        t_val += t_args[i].stats.fail_validation_count; // 数据校验错误
     }
-    total_fail = t_403 + t_404 + t_409 + t_4xx + t_5xx + t_other + t_val;
+    
+    long long total_fail = t_403 + t_404 + t_409 + t_4xx + t_5xx + t_other + t_val;
     long long total_reqs = total_success + total_fail;
     
     double tps = (actual_time_s > 0) ? (total_reqs / actual_time_s) : 0.0;
-    // [修改] 使用真实累加的字节数计算吞吐量
     double throughput_mb = (total_bytes) / 1024.0 / 1024.0 / actual_time_s;
 
+    // [修改] 输出报告格式，单独展示 DataConsistencyError
     printf("\n--- Test Result ---\n");
     printf("Actual Duration: %.2f s\n", actual_time_s);
     printf("Total Requests:  %lld\n", total_reqs);
     printf("Success:         %lld\n", total_success);
+    
     printf("Failed:          %lld\n", total_fail);
-    if (t_val > 0) printf("  [!] Validation Fails: %lld\n", t_val);
+    printf("  |- 403 (Forbidden):  %lld\n", t_403);
+    printf("  |- 404 (NotFound):   %lld\n", t_404);
+    printf("  |- 409 (Conflict):   %lld\n", t_409);
+    printf("  |- 4xx (Other):      %lld\n", t_4xx);
+    printf("  |- 5xx (Server):     %lld\n", t_5xx);
+    printf("  |- Other (Net/SDK):  %lld\n", t_other);
+    printf("  |- Other (DataConsistencyError):  %lld\n", t_val);
+    
     printf("TPS:             %.2f\n", tps);
     printf("Throughput:      %.2f MB/s\n", throughput_mb);
 
@@ -245,6 +313,9 @@ int main(int argc, char **argv) {
 
     free(tids);
     free(t_args);
+    for(int i=0; i<MAX_RANGE_OPTIONS; i++) {
+        if (cfg.range_options[i]) free(cfg.range_options[i]);
+    }
     if (cfg.user_list) free(cfg.user_list);
     deinitialize_break_point_lock();
     obs_deinitialize();

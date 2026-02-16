@@ -64,7 +64,13 @@ typedef struct {
 } obs_options;
 
 typedef struct { char *key; } obs_object_info;
-typedef struct { uint64_t start_byte; } obs_get_conditions;
+
+// [修改] 增加 byte_count 支持 Range
+typedef struct { 
+    uint64_t start_byte; 
+    uint64_t byte_count; 
+} obs_get_conditions;
+
 typedef struct { char *content_type; } obs_put_properties;
 
 typedef struct {
@@ -106,7 +112,6 @@ typedef struct {
 } server_side_encryption_params;
 
 // --- Callbacks ---
-// [修改] 增加 content_length 字段，适配 obs_adapter.c 的新逻辑
 typedef struct { 
     const char *etag; 
     uint64_t content_length;

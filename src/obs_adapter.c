@@ -3,23 +3,24 @@
 #include <libgen.h>  
 #include <string.h> 
 
-// [Scheme 3] 传输上下文
 typedef struct {
     WorkerArgs *args;           
     long long total_processed;
-    // [新增] 期望从服务端接收的 Content-Length
     long long expected_content_length;
     int validation_failed;      
     obs_status ret_status;
     char error_msg[256];
     char returned_upload_id[256]; 
     char returned_etag[256];
+
+    // Range 校验支持
+    long long pattern_start_offset; // 校验的起始偏移
+    int skip_validation;            // 是否跳过校验
 } transfer_context;
 
 obs_status response_properties_callback(const obs_response_properties *properties, void *callback_data) {
     transfer_context *ctx = (transfer_context *)callback_data;
     if (ctx && properties) {
-        // [新增] 捕获 Content-Length
         if (properties->content_length > 0) {
             ctx->expected_content_length = properties->content_length;
         }
@@ -41,7 +42,6 @@ void response_complete_callback(obs_status status, const obs_error_details *erro
     }
 }
 
-// 环形上传
 int put_buffer_callback_optimized(int buffer_size, char *buffer, void *callback_data) {
     transfer_context *ctx = (transfer_context *)callback_data;
     WorkerArgs *args = ctx->args;
@@ -62,12 +62,11 @@ int put_buffer_callback_optimized(int buffer_size, char *buffer, void *callback_
     return bytes_copied;
 }
 
-// 环形下载校验
 obs_status get_buffer_callback_optimized(int buffer_size, const char *buffer, void *callback_data) {
     transfer_context *ctx = (transfer_context *)callback_data;
     WorkerArgs *args = ctx->args;
 
-    if (!args->config->enable_data_validation) {
+    if (!args->config->enable_data_validation || ctx->skip_validation) {
         ctx->total_processed += buffer_size;
         return OBS_STATUS_OK;
     }
@@ -75,7 +74,10 @@ obs_status get_buffer_callback_optimized(int buffer_size, const char *buffer, vo
     if (ctx->validation_failed) return OBS_STATUS_OK;
     if (!args->pattern_buffer || !buffer) return OBS_STATUS_InternalError;
 
-    long long offset = ctx->total_processed & args->pattern_mask;
+    // 校验时的 Offset 必须加上 Range 的起始偏移
+    long long absolute_pos = ctx->pattern_start_offset + ctx->total_processed;
+    long long offset = absolute_pos & args->pattern_mask;
+
     int bytes_checked = 0;
     
     while (bytes_checked < buffer_size) {
@@ -85,14 +87,16 @@ obs_status get_buffer_callback_optimized(int buffer_size, const char *buffer, vo
         
         if (memcmp(buffer + bytes_checked, args->pattern_buffer + offset, to_check) != 0) {
              ctx->validation_failed = 1;
-             LOG_ERROR("[DATA_CORRUPTION] Object: %s, Global Offset: %lld, Pattern Offset: %lld, Check Len: %d", 
-                       args->username, ctx->total_processed + bytes_checked, offset, to_check);
+             LOG_ERROR("[DATA_CORRUPTION] Object: %s, Abs Offset: %lld, Pattern Offset: %lld, Check Len: %d", 
+                       args->username, absolute_pos + bytes_checked, offset, to_check);
+             // 返回错误以中断下载
              return OBS_STATUS_InternalError; 
         }
         
         bytes_checked += to_check;
         ctx->total_processed += to_check;
-        offset = ctx->total_processed & args->pattern_mask;
+        absolute_pos += to_check;
+        offset = absolute_pos & args->pattern_mask;
     }
     return OBS_STATUS_OK;
 }
@@ -143,12 +147,10 @@ static void setup_options(obs_options *option, WorkerArgs *args) {
     }
 }
 
-// [修改] 增加 size 参数
 obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size) {
     obs_options option;
     setup_options(&option, args);
-    // 上传时，total_processed 初始为 0，确保环形逻辑起点一致
-    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}};
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0};
 
     obs_put_properties put_props;
     init_put_properties(&put_props);
@@ -162,7 +164,49 @@ obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size)
     return ctx.ret_status;
 }
 
-obs_status run_get_benchmark(WorkerArgs *args, char *key) {
+// 解析 Range 并设置 Condition
+static void apply_range_conditions(const char *range_str, obs_get_conditions *cond, transfer_context *ctx) {
+    if (!range_str || strlen(range_str) == 0) {
+        cond->start_byte = 0;
+        cond->byte_count = 0;
+        ctx->pattern_start_offset = 0;
+        return;
+    }
+
+    long long start = 0, end = 0;
+    char *hyphen = strchr(range_str, '-');
+    
+    if (hyphen) {
+        if (hyphen == range_str) {
+            // Case: "-200" 
+            end = atoll(hyphen + 1);
+            cond->start_byte = 0;
+            cond->byte_count = end + 1; 
+            ctx->pattern_start_offset = 0;
+            ctx->skip_validation = 0; 
+            
+        } else if (*(hyphen + 1) == '\0') {
+            // Case: "9-" 
+            *hyphen = '\0';
+            start = atoll(range_str);
+            cond->start_byte = start;
+            cond->byte_count = 0; 
+            ctx->pattern_start_offset = start;
+            *hyphen = '-'; 
+        } else {
+            // Case: "0-9" 
+            *hyphen = '\0';
+            start = atoll(range_str);
+            end = atoll(hyphen + 1);
+            cond->start_byte = start;
+            cond->byte_count = end - start + 1;
+            ctx->pattern_start_offset = start;
+            *hyphen = '-';
+        }
+    }
+}
+
+obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str) {
     obs_options option;
     setup_options(&option, args);
     obs_object_info obj_info = {0};
@@ -170,7 +214,16 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key) {
     obs_get_conditions conditions;
     init_get_properties(&conditions);
 
-    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}};
+    // 初始化 Context
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0};
+    
+    // 解析 Range
+    if (range_str) {
+        char *temp_range = strdup(range_str);
+        apply_range_conditions(temp_range, &conditions, &ctx);
+        free(temp_range);
+    }
+
     obs_get_object_handler handler = {0};
     handler.response_handler.properties_callback = &response_properties_callback;
     handler.response_handler.complete_callback = &response_complete_callback;
@@ -178,7 +231,7 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key) {
 
     get_object(&option, &obj_info, &conditions, NULL, &handler, &ctx);
     
-    // [新增] 长度校验：下载的字节数必须等于 Header 中的 Content-Length
+    // 长度检查：只有在 SDK 成功且有长度信息时才进行
     if (ctx.ret_status == OBS_STATUS_OK && ctx.expected_content_length > 0) {
         if (ctx.total_processed != ctx.expected_content_length) {
             LOG_ERROR("Data Incomplete! Key: %s, Expected: %lld, Got: %lld", 
@@ -188,13 +241,13 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key) {
         }
     }
     
-    // 逻辑层校验失败
-    if (ctx.ret_status == OBS_STATUS_OK && ctx.validation_failed) {
+    // [修复] 优先检查 validation_failed 标记。
+    // 即便 SDK 因为回调返回错误而报 InternalError，只要标记位是 1，就视为数据一致性错误。
+    if (ctx.validation_failed) {
         args->stats.fail_validation_count++; 
         return OBS_STATUS_InternalError; 
     }
 
-    // [新增] GET 操作由 Adapter 更新流量统计 (因为大小由服务端决定)
     if (ctx.ret_status == OBS_STATUS_OK) {
         args->stats.total_success_bytes += ctx.total_processed;
     }
@@ -205,7 +258,7 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key) {
 obs_status run_delete_benchmark(WorkerArgs *args, char *key) {
     obs_options option;
     setup_options(&option, args);
-    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}};
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0};
     obs_object_info obj_info = {0};
     obj_info.key = key;
     obs_response_handler handler = {0};
@@ -218,7 +271,7 @@ obs_status run_delete_benchmark(WorkerArgs *args, char *key) {
 obs_status run_list_benchmark(WorkerArgs *args) {
     obs_options option;
     setup_options(&option, args);
-    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}};
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0};
     obs_list_objects_handler handler = {0};
     handler.response_handler.properties_callback = &response_properties_callback;
     handler.response_handler.complete_callback = &response_complete_callback;
@@ -236,7 +289,7 @@ obs_status run_multipart_benchmark(WorkerArgs *args, char *key) {
 obs_status run_upload_file_benchmark(WorkerArgs *args, char *key) {
     obs_options option;
     setup_options(&option, args);
-    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}};
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0};
     obs_put_properties put_props;
     init_put_properties(&put_props);
     int pause_flag = 0;
