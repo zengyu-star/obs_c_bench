@@ -28,11 +28,13 @@ void *worker_routine(void *arg) {
         return NULL;
     }
 
+    // [新增] 线程安全的随机种子
+    unsigned int thread_seed = (unsigned int)(time(NULL) ^ (long)pthread_self());
+
     obs_status status = OBS_STATUS_OK;
     int op_index = 0;
     
     while (1) {
-        // --- 约束 1: 时间上限检查 ---
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
         double now_ms = ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
@@ -41,8 +43,6 @@ void *worker_routine(void *arg) {
             break;
         }
 
-        // --- 约束 2: 请求定额检查 ---
-        // 无论是否设置 RunSeconds，只要 RequestsPerThread 达到了就提前退出
         if (args->config->requests_per_thread > 0) {
             long long current_requests = args->stats.success_count + 
                                          args->stats.fail_403_count + 
@@ -60,9 +60,17 @@ void *worker_routine(void *arg) {
             }
         }
         
+        // [修改] 动态计算本次请求的大小
+        long long current_req_size;
+        if (args->config->is_dynamic_size) {
+            current_req_size = args->config->object_size_min + 
+                               (rand_r(&thread_seed) % (args->config->object_size_max - args->config->object_size_min + 1));
+        } else {
+            current_req_size = args->config->object_size_max;
+        }
+
         int current_case = args->config->test_case;
         if (args->config->use_mix_mode) {
-             // --- 约束 3: 混合模式工作量检查 ---
              if (op_index >= args->config->mix_op_count * args->config->mix_loop_count) {
                  LOG_INFO("Thread %d finished mix operations. Stopping early.", args->thread_id);
                  break;
@@ -80,7 +88,8 @@ void *worker_routine(void *arg) {
 
         switch(current_case) {
             case TEST_CASE_PUT:
-                status = run_put_benchmark(args, key);
+                // 传入动态大小
+                status = run_put_benchmark(args, key, current_req_size);
                 break;
             case TEST_CASE_GET:
                 status = run_get_benchmark(args, key);
@@ -101,16 +110,19 @@ void *worker_routine(void *arg) {
 
         if (status == OBS_STATUS_OK) {
             args->stats.success_count++;
+            // [新增] PUT 操作由 Worker 负责累计流量 (因为是我们决定的发送大小)
+            // GET 操作由 Adapter 负责累计 (因为是服务端决定的接收大小)
+            if (current_case == TEST_CASE_PUT) {
+                args->stats.total_success_bytes += current_req_size;
+            }
         } else {
             if (status == OBS_STATUS_AccessDenied) args->stats.fail_403_count++;
             else if (status == OBS_STATUS_NoSuchBucket || status == OBS_STATUS_NoSuchKey) args->stats.fail_404_count++;
             else if (status == OBS_STATUS_BucketAlreadyExists) args->stats.fail_409_count++;
             else if (status >= 400 && status < 500) args->stats.fail_4xx_other_count++;
             else if (status >= 500 && status < 600) args->stats.fail_5xx_count++;
-            else if (status == OBS_STATUS_InternalError) {
-                // 通常只有校验失败我们在逻辑层返回此错误
-                // 具体的校验失败统计已在 run_get_benchmark 中处理
-            } else args->stats.fail_other_count++;
+            else if (status == OBS_STATUS_InternalError) { } // 已处理
+            else args->stats.fail_other_count++;
         }
         op_index++;
     }

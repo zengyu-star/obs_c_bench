@@ -44,6 +44,12 @@ void save_benchmark_report(Config *cfg, long long total,
     fprintf(fp, "Threads: %d\n", cfg->threads);
     fprintf(fp, "TestCase: %d\n", cfg->test_case);
     fprintf(fp, "Validation: %s\n", cfg->enable_data_validation ? "Enabled" : "Disabled");
+    if (cfg->is_dynamic_size) {
+        fprintf(fp, "ObjectSize: %lld ~ %lld (Dynamic)\n", cfg->object_size_min, cfg->object_size_max);
+    } else {
+        fprintf(fp, "ObjectSize: %lld (Fixed)\n", cfg->object_size_max);
+    }
+    
     fprintf(fp, "\n--- Statistics ---\n");
     fprintf(fp, "Total Requests: %lld\n", total);
     fprintf(fp, "Success: %lld\n", success);
@@ -148,7 +154,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    // --- 时间戳计算优化 ---
     double current_ms = 0; 
     struct timespec ts_start;
     clock_gettime(CLOCK_MONOTONIC_COARSE, &ts_start);
@@ -156,10 +161,8 @@ int main(int argc, char **argv) {
 
     double stop_ms;
     if (cfg.run_seconds > 0) {
-        // 设置了时长，截止时间为当前 + 运行时长
         stop_ms = current_ms + (cfg.run_seconds * 1000.0);
     } else {
-        // 未设置时长（按次数），截止时间设为 100 年后（绝对安全边界）
         stop_ms = current_ms + (100LL * 365 * 24 * 3600 * 1000.0);
     }
 
@@ -202,14 +205,16 @@ int main(int argc, char **argv) {
     for (int i = 0; i < cfg.threads; i++) pthread_join(tids[i], NULL);
 
     gettimeofday(&end_tv, NULL);
-    // 使用实际流逝的时间计算 TPS
     double actual_time_s = (end_tv.tv_sec - start_tv.tv_sec) + (end_tv.tv_usec - start_tv.tv_usec) / 1000000.0;
 
-    long long total_success = 0, total_fail = 0;
+    long long total_success = 0, total_fail = 0, total_bytes = 0;
     long long t_403=0, t_404=0, t_409=0, t_4xx=0, t_5xx=0, t_other=0, t_val=0;
 
     for (int i = 0; i < cfg.threads; i++) {
         total_success += t_args[i].stats.success_count;
+        // [新增] 累加所有线程的真实传输字节数
+        total_bytes += t_args[i].stats.total_success_bytes;
+        
         t_403 += t_args[i].stats.fail_403_count;
         t_404 += t_args[i].stats.fail_404_count;
         t_409 += t_args[i].stats.fail_409_count;
@@ -222,12 +227,8 @@ int main(int argc, char **argv) {
     long long total_reqs = total_success + total_fail;
     
     double tps = (actual_time_s > 0) ? (total_reqs / actual_time_s) : 0.0;
-    long long calc_size = cfg.object_size;
-    if (cfg.test_case == TEST_CASE_RESUMABLE) {
-        struct stat st;
-        if (stat(cfg.upload_file_path, &st) == 0) calc_size = st.st_size;
-    }
-    double throughput_mb = (total_success * calc_size) / 1024.0 / 1024.0 / actual_time_s;
+    // [修改] 使用真实累加的字节数计算吞吐量
+    double throughput_mb = (total_bytes) / 1024.0 / 1024.0 / actual_time_s;
 
     printf("\n--- Test Result ---\n");
     printf("Actual Duration: %.2f s\n", actual_time_s);

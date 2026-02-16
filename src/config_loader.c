@@ -107,9 +107,11 @@ int load_config(const char *filename, Config *cfg) {
     cfg->client_cert_path[0] = '\0';
     cfg->client_key_path[0] = '\0';
     cfg->client_key_password[0] = '\0';
-    
-    // [新增] 默认关闭
     cfg->enable_data_validation = 0;
+    
+    // 默认大小，后续会被覆盖
+    cfg->object_size_min = cfg->object_size_max = 1024;
+    cfg->is_dynamic_size = 0;
 
     char ssl_min_str[16] = {0};
     char ssl_max_str[16] = {0};
@@ -137,7 +139,32 @@ int load_config(const char *filename, Config *cfg) {
         else if (strcmp(key, "ThreadsPerUser") == 0) cfg->threads_per_user = atoi(val);
         else if (strcmp(key, "RequestsPerThread") == 0) cfg->requests_per_thread = atoi(val);
         else if (strcmp(key, "TestCase") == 0) cfg->test_case = atoi(val);
-        else if (strcmp(key, "ObjectSize") == 0) cfg->object_size = atoll(val);
+        
+        // [修改] 解析 ObjectSize 支持范围 (e.g. 1024~2048)
+        else if (strcmp(key, "ObjectSize") == 0) {
+            char *tilde = strchr(val, '~');
+            if (tilde) {
+                *tilde = '\0';
+                cfg->object_size_min = atoll(val);
+                cfg->object_size_max = atoll(tilde + 1);
+
+                // [新增] 校验逻辑：左边界必须 <= 右边界
+                if (cfg->object_size_min > cfg->object_size_max) {
+                    printf("[Config Error] Invalid ObjectSize range: min (%lld) > max (%lld). Left boundary must be <= Right boundary.\n", 
+                           cfg->object_size_min, cfg->object_size_max);
+                    fclose(fp); 
+                    return -1; // 返回错误码，主程序将退出
+                }
+
+                cfg->is_dynamic_size = 1;
+                cfg->object_size = cfg->object_size_max; // 兼容显示
+            } else {
+                cfg->object_size_min = cfg->object_size_max = atoll(val);
+                cfg->is_dynamic_size = 0;
+                cfg->object_size = cfg->object_size_max;
+            }
+        }
+
         else if (strcmp(key, "PartSize") == 0) cfg->part_size = atoll(val);
         else if (strcmp(key, "KeyPrefix") == 0) strcpy(cfg->key_prefix, val);
         else if (strcmp(key, "MixOperation") == 0) cfg->mix_op_count = parse_mix_ops(val, cfg->mix_ops, MAX_MIX_OPS);
@@ -150,8 +177,6 @@ int load_config(const char *filename, Config *cfg) {
         else if (strcmp(key, "ClientCertPath") == 0) strcpy(cfg->client_cert_path, val);
         else if (strcmp(key, "ClientKeyPath") == 0) strcpy(cfg->client_key_path, val);
         else if (strcmp(key, "ClientKeyPassword") == 0) strcpy(cfg->client_key_password, val);
-        
-        // [新增] 解析校验开关
         else if (strcmp(key, "EnableDataValidation") == 0) cfg->enable_data_validation = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
     }
     
@@ -209,11 +234,14 @@ int load_config(const char *filename, Config *cfg) {
         fclose(fp); return -1;
     }
 
-    // [新增] 打印校验状态
     if (cfg->enable_data_validation) {
         printf("[Config] Data Validation: ENABLED (Scheme 3: In-Memory/File Isomorphic Verification)\n");
     }
     
+    if (cfg->is_dynamic_size) {
+        printf("[Config] Dynamic Object Size: %lld ~ %lld bytes\n", cfg->object_size_min, cfg->object_size_max);
+    }
+
     fclose(fp);
     return 0;
 }

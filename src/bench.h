@@ -53,7 +53,13 @@ typedef struct {
     // --- 测试计划 ---
     int requests_per_thread; 
     int test_case; 
-    long long object_size;
+    
+    // [修改] 支持对象大小范围
+    long long object_size;      // 兼容旧逻辑（显示用）
+    long long object_size_min;  // 范围下限
+    long long object_size_max;  // 范围上限
+    int is_dynamic_size;        // 是否为动态大小
+
     long long part_size;
     char key_prefix[64];
     int run_seconds;
@@ -80,7 +86,7 @@ typedef struct {
     char client_key_path[256];
     char client_key_password[256];
 
-    // [新增] 数据校验开关
+    // --- 数据校验 ---
     int enable_data_validation;
 
 } Config;
@@ -93,9 +99,10 @@ typedef struct {
     long long fail_4xx_other_count; 
     long long fail_5xx_count;   
     long long fail_other_count; 
-    
-    // [新增] 校验失败计数
     long long fail_validation_count;
+
+    // [新增] 累计成功传输的字节数（用于精确计算吞吐量）
+    long long total_success_bytes;
 
     double total_latency_ms;
     double max_latency_ms;
@@ -114,7 +121,6 @@ typedef struct {
     char effective_bucket[128];
     char username[64];
     
-    // [新增] 线程级预计算的环形模式缓冲区
     char *pattern_buffer;       
     long long pattern_size;     
     long long pattern_mask;     
@@ -123,11 +129,10 @@ typedef struct {
 // 函数声明
 int load_config(const char *filename, Config *cfg);
 void *worker_routine(void *arg);
-
-// [新增] 公共算法函数
 void fill_pattern_buffer(char *buf, size_t size, int seed);
 
-obs_status run_put_benchmark(WorkerArgs *args, char *key);
+// [修改] run_put_benchmark 增加 size 参数
+obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size);
 obs_status run_get_benchmark(WorkerArgs *args, char *key);
 obs_status run_delete_benchmark(WorkerArgs *args, char *key);
 obs_status run_list_benchmark(WorkerArgs *args);

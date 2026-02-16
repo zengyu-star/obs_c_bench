@@ -42,7 +42,7 @@ MixLoopCount=100
 # -----------------------------------------------------------------
 # [Object Configuration]
 # -----------------------------------------------------------------
-ObjectSize=5242880
+ObjectSize=5242880~9242880
 PartSize=5242880
 KeyPrefix=obj
 ObjNamePatternHash=true
