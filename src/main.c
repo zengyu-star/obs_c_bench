@@ -60,7 +60,6 @@ int file_exists(const char *filepath) {
     return (stat(filepath, &buffer) == 0);
 }
 
-// [新增] 生成确定性测试文件
 int create_deterministic_file(const char *filepath, long long size) {
     if (file_exists(filepath)) {
         struct stat st;
@@ -81,7 +80,6 @@ int create_deterministic_file(const char *filepath, long long size) {
     char *buf = malloc(buf_size);
     if (!buf) { fclose(fp); return -1; }
     
-    // 使用与 Worker 相同的算法
     fill_pattern_buffer(buf, buf_size, 0);
 
     long long written = 0;
@@ -145,17 +143,25 @@ int main(int argc, char **argv) {
     if (need_upload_file) {
         struct stat st = {0};
         if (stat("upload_checkpoint", &st) == -1) mkdir("upload_checkpoint", 0755);
-        // [新增] 自动生成文件
         if (strlen(cfg.upload_file_path) > 0) {
-            create_deterministic_file(cfg.upload_file_path, 10 * 1024 * 1024); // 默认10MB
+            create_deterministic_file(cfg.upload_file_path, 10 * 1024 * 1024); 
         }
     }
 
+    // --- 时间戳计算优化 ---
     double current_ms = 0; 
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
-    current_ms = ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
-    double stop_ms = (cfg.run_seconds > 0) ? (current_ms + (cfg.run_seconds * 1000.0)) : 1e15;
+    struct timespec ts_start;
+    clock_gettime(CLOCK_MONOTONIC_COARSE, &ts_start);
+    current_ms = ts_start.tv_sec * 1000.0 + ts_start.tv_nsec / 1000000.0;
+
+    double stop_ms;
+    if (cfg.run_seconds > 0) {
+        // 设置了时长，截止时间为当前 + 运行时长
+        stop_ms = current_ms + (cfg.run_seconds * 1000.0);
+    } else {
+        // 未设置时长（按次数），截止时间设为 100 年后（绝对安全边界）
+        stop_ms = current_ms + (100LL * 365 * 24 * 3600 * 1000.0);
+    }
 
     pthread_t *tids = (pthread_t *)malloc(cfg.threads * sizeof(pthread_t));
     WorkerArgs *t_args = (WorkerArgs *)calloc(cfg.threads, sizeof(WorkerArgs));
@@ -196,7 +202,8 @@ int main(int argc, char **argv) {
     for (int i = 0; i < cfg.threads; i++) pthread_join(tids[i], NULL);
 
     gettimeofday(&end_tv, NULL);
-    double total_time_s = (end_tv.tv_sec - start_tv.tv_sec) + (end_tv.tv_usec - start_tv.tv_usec) / 1000000.0;
+    // 使用实际流逝的时间计算 TPS
+    double actual_time_s = (end_tv.tv_sec - start_tv.tv_sec) + (end_tv.tv_usec - start_tv.tv_usec) / 1000000.0;
 
     long long total_success = 0, total_fail = 0;
     long long t_403=0, t_404=0, t_409=0, t_4xx=0, t_5xx=0, t_other=0, t_val=0;
@@ -214,21 +221,22 @@ int main(int argc, char **argv) {
     total_fail = t_403 + t_404 + t_409 + t_4xx + t_5xx + t_other + t_val;
     long long total_reqs = total_success + total_fail;
     
-    double tps = (total_time_s > 0) ? (total_reqs / total_time_s) : 0.0;
+    double tps = (actual_time_s > 0) ? (total_reqs / actual_time_s) : 0.0;
     long long calc_size = cfg.object_size;
     if (cfg.test_case == TEST_CASE_RESUMABLE) {
         struct stat st;
         if (stat(cfg.upload_file_path, &st) == 0) calc_size = st.st_size;
     }
-    double throughput_mb = (total_success * calc_size) / 1024.0 / 1024.0 / total_time_s;
+    double throughput_mb = (total_success * calc_size) / 1024.0 / 1024.0 / actual_time_s;
 
     printf("\n--- Test Result ---\n");
-    printf("Total Requests: %lld\n", total_reqs);
-    printf("Success:        %lld\n", total_success);
-    printf("Failed:         %lld\n", total_fail);
+    printf("Actual Duration: %.2f s\n", actual_time_s);
+    printf("Total Requests:  %lld\n", total_reqs);
+    printf("Success:         %lld\n", total_success);
+    printf("Failed:          %lld\n", total_fail);
     if (t_val > 0) printf("  [!] Validation Fails: %lld\n", t_val);
-    printf("TPS:            %.2f\n", tps);
-    printf("Throughput:     %.2f MB/s\n", throughput_mb);
+    printf("TPS:             %.2f\n", tps);
+    printf("Throughput:      %.2f MB/s\n", throughput_mb);
 
     save_benchmark_report(&cfg, total_reqs, total_success, total_fail, 
                           t_403, t_404, t_409, t_4xx, t_5xx, t_other, t_val,

@@ -32,7 +32,7 @@ BucketNameFixed=
 # [Test Plan]
 # -----------------------------------------------------------------
 TestCase=201
-RunSeconds=
+RunSeconds=60
 RequestsPerThread=1
 
 # [Mixed Mode Settings] (Only used if TestCase=900)

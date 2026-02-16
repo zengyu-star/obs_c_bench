@@ -2,10 +2,8 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 
-// [新增] 1MB Pattern Buffer
 #define PATTERN_BUF_SIZE (1 * 1024 * 1024)
 
-// [新增] 确定性填充算法
 void fill_pattern_buffer(char *buf, size_t size, int seed) {
     unsigned int s = seed;
     const unsigned int A = 1664525;
@@ -18,15 +16,12 @@ void fill_pattern_buffer(char *buf, size_t size, int seed) {
 void *worker_routine(void *arg) {
     WorkerArgs *args = (WorkerArgs *)arg;
     
-    // [修改] 启用环形缓冲区优化
     args->pattern_size = PATTERN_BUF_SIZE;
     args->pattern_mask = PATTERN_BUF_SIZE - 1;
     args->pattern_buffer = (char *)malloc(args->pattern_size);
     
     if (args->pattern_buffer) {
-        // 使用 Seed=0 填充，确保与 Python 脚本一致
         fill_pattern_buffer(args->pattern_buffer, args->pattern_size, 0);
-        // 让 data_buffer 指向 pattern_buffer，兼容旧接口参数
         args->data_buffer = args->pattern_buffer;
     } else {
         LOG_ERROR("Thread %d failed to allocate pattern buffer", args->thread_id);
@@ -37,23 +32,42 @@ void *worker_routine(void *arg) {
     int op_index = 0;
     
     while (1) {
-        // 时间检查
+        // --- 约束 1: 时间上限检查 ---
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
         double now_ms = ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
-        if (now_ms > args->stop_timestamp_ms) break;
-
-        // 次数检查
-        if (args->config->run_seconds == 0 && 
-            (args->stats.success_count + args->stats.fail_other_count) >= args->config->requests_per_thread) {
+        if (now_ms >= args->stop_timestamp_ms) {
+            LOG_INFO("Thread %d reaching RunSeconds limit. Stopping...", args->thread_id);
             break;
+        }
+
+        // --- 约束 2: 请求定额检查 ---
+        // 无论是否设置 RunSeconds，只要 RequestsPerThread 达到了就提前退出
+        if (args->config->requests_per_thread > 0) {
+            long long current_requests = args->stats.success_count + 
+                                         args->stats.fail_403_count + 
+                                         args->stats.fail_404_count + 
+                                         args->stats.fail_409_count + 
+                                         args->stats.fail_4xx_other_count + 
+                                         args->stats.fail_5xx_count + 
+                                         args->stats.fail_other_count +
+                                         args->stats.fail_validation_count;
+
+            if (current_requests >= args->config->requests_per_thread) {
+                LOG_INFO("Thread %d finished its quota (%d requests). Stopping early.", 
+                         args->thread_id, args->config->requests_per_thread);
+                break;
+            }
         }
         
         int current_case = args->config->test_case;
         if (args->config->use_mix_mode) {
+             // --- 约束 3: 混合模式工作量检查 ---
+             if (op_index >= args->config->mix_op_count * args->config->mix_loop_count) {
+                 LOG_INFO("Thread %d finished mix operations. Stopping early.", args->thread_id);
+                 break;
+             }
              current_case = args->config->mix_ops[op_index % args->config->mix_op_count];
-             op_index++;
-             if (op_index >= args->config->mix_op_count * args->config->mix_loop_count) break;
         }
 
         char key[256];
@@ -93,11 +107,14 @@ void *worker_routine(void *arg) {
             else if (status == OBS_STATUS_BucketAlreadyExists) args->stats.fail_409_count++;
             else if (status >= 400 && status < 500) args->stats.fail_4xx_other_count++;
             else if (status >= 500 && status < 600) args->stats.fail_5xx_count++;
-            else args->stats.fail_other_count++;
+            else if (status == OBS_STATUS_InternalError) {
+                // 通常只有校验失败我们在逻辑层返回此错误
+                // 具体的校验失败统计已在 run_get_benchmark 中处理
+            } else args->stats.fail_other_count++;
         }
+        op_index++;
     }
 
-    // 释放内存
     if (args->pattern_buffer) free(args->pattern_buffer);
     return NULL;
 }
