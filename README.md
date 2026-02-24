@@ -1,165 +1,167 @@
-# OBS C SDK Benchmark Tool
+这是一个基于我们这段时间所有架构演进、性能优化和监控重构后，为您量身定制的最新版 `README.md` 文件。
 
-**OBS C SDK Benchmark Tool** 是一个高性能、基于 C 语言开发的 Huawei OBS (Object Storage Service) 压测工具。它专为评估 OBS C SDK 在**高并发**、**多租户**以及**安全增强（国密/双向认证）**场景下的性能与稳定性而设计。
+这份文档不仅包含了工具的编译与运行指南，还详细说明了其独有的**高性能特性（LCG哈希、无锁监控、内存池校验）以及自动化可视化分析流程**。
 
-## 🚀 核心特性
+您可以直接将其保存为项目根目录下的 `README.md`。
 
-* **多模式运行引擎**：
-* **Real Mode**: 链接真实 `libeSDKOBS.so`，连接云端 OBS 服务进行压测。
-* **Mock Mode**: 内置仿真 SDK (`mock_sdk.c`)，无需网络即可验证工具逻辑、线程调度及配置正确性。
+---
 
+# OBS C SDK Benchmark Tool (obs_c_bench)
 
-* **强制多租户架构 (Multi-Tenancy)**：
-* 完全摒弃全局 AK/SK，强制通过 `users.dat` 加载多用户凭证。
-* 每个用户拥有独立的线程池，模拟真实的公有云多租户并发场景。
-* 支持动态桶名生成 (`{ak}.{prefix}`) 或强制固定桶名模式。
+`obs_c_bench` 是一款专为华为云对象存储服务 (OBS) 打造的工业级、高性能 C 语言压测工具。它基于官方 OBS C SDK 开发，采用了极致的无锁并发架构，旨在帮助开发者、架构师和测试工程师准确评估云存储后端的极限 TPS、吞吐带宽以及长尾时延表现。
 
+## 🌟 核心特性 (Key Features)
 
-* **安全增强 (Security & GM)**：
-* **国密支持**: 可配置开启国密模式 (GM Mode)，支持 SM2/SM3/SM4 算法（需 SDK 支持）。
-* **SSL 版本控制**: 支持精细化控制 SSL 最小/最大版本 (TLS 1.0 - 1.3)。
-* **双向认证 (Mutual SSL)**: 支持配置客户端证书 (`ClientCert`) 与私钥 (`ClientKey`) 进行双向身份验证。
+* **极致的并发性能 (Lock-Free Architecture)**
+* Worker 线程执行请求及本地统计数据收集时**全程无锁**，榨干压测机每一滴 CPU 性能。
+* 独立的旁路监控线程（Monitor Thread）每 3 秒无锁采集全局状态，实时输出累计 TPS、带宽与成功率，对发流性能 **0 干扰**。
 
 
-* **混合负载编排 (Mixed Workload)**：
-* 支持脚本化定义操作序列（如 `201,202,204` 代表 `上传->下载->删除`），并指定循环次数。
+* **确定性伪随机打散 (LCG Hash Naming)**
+* 内置标准 LCG (Linear Congruential Generator) 算法。开启 `ObjNamePatternHash=true` 后，可在对象名前缀生成均匀离散的 Hash 值，**彻底消除云存储底层分片的热点瓶颈**。
+* 算法具备强确定性，确保先执行 PUT 压测后，再次执行 GET 压测能够 100% 精确命中已上传的对象。
 
 
-* **自动化测试套件**:
-* 内置 Python 脚本，一键完成 `Mock` -> `Standard` -> `Mock_ASan` -> `ASan` 全流程冒烟测试。
+* **零拷贝异构数据校验 (Zero-Copy Validation)**
+* 支持 `EnableDataValidation=true`。工具在内存中预分配 1MB 的确定性特征环形缓冲区（Pattern Buffer）。
+* 下载过程在网络回调层实时计算绝对偏移量，进行异构比对。即使并发 Range 下载，也能在极低 CPU 消耗下完成严格的**数据一致性校验**，精准捕获静默错误 (DataConsistencyError)。
+
+
+* **智能多租户桶路由 (Smart Bucket Routing)**
+* 支持 `users.dat` 批量加载多账户。
+* 动态桶名拼接策略：自动按照 `{ak_lowercase}.{BucketNamePrefix}` 的格式将流量路由至各账户的专属桶，或通过 `BucketNameFixed` 强制打向固定桶。
+
+
+* **防爆内存的海量流水落盘 (Log Rotation)**
+* 开启 `EnableDetailLog=true` 后，支持请求级明细流水落盘。
+* 工具自动按任务时间戳创建独立隔离目录（如 `logs/task_20260224_120000/`）。
+* 单线程流水文件达到 1,000,000 行自动滚动切分（Rotation），防范长时间高并发测试导致的磁盘爆满与后处理 OOM。
+
+
+* **一键式可视化看板 (Automated Dashboard)**
+* 提供配套的 Python 脚本，支持海量分片日志的一键合并、时延排序及 P99/P99.9 长尾计算。
+* 自动生成包含散点图、CDF 累积分布、TPS/带宽趋势、状态码占比的 2x2 高清诊断看板。
 
 
 
 ---
 
-## 🛠️ 编译与构建
+## 🛠️ 编译与安装 (Build & Install)
 
-### 前置依赖
+### 依赖项
 
-* GCC / Clang
-* Make
-* Pthread, Libcurl, OpenSSL
-* **Huawei OBS C SDK** (`libeSDKOBS.so` 及其头文件，需放置在 `./lib` 和 `./include` 目录下)
+* Linux 环境 (CentOS / Ubuntu 等)
+* GCC 编译器 (支持 C99/GNU99 标准)
+* 华为云 OBS C SDK (`eSDKOBS`) 及对应的 `libcurl`, `openssl` 动态库。
+* Python 3.x 及 `pandas`, `matplotlib` (仅用于后期图表生成)
 
-### 构建命令
-
-| 命令 | 描述 | 输出文件 |
-| --- | --- | --- |
-| `make` | **[标准模式]** 编译真实 SDK 版本 | `obs_c_bench` |
-| `make mock` | **[仿真模式]** 编译 Mock SDK 版本 (无网络依赖) | `obs_c_bench_mock` |
-| `make asan` | **[调试模式]** 真实 SDK + 内存检测 (AddressSanitizer) | `obs_c_bench_asan` |
-| `make mock_asan` | **[调试模式]** Mock SDK + 内存检测 (AddressSanitizer) | `obs_c_bench_mock_asan` |
-| `make clean` | 清理所有编译产物 | - |
-
----
-
-## ⚙️ 配置说明
-
-工具启动必须依赖根目录下的 `config.dat` (主配置) 和 `users.dat` (用户凭证)。
-
-### 1. 用户凭证 (`users.dat`)
-
-**必选**。CSV 格式，无标题行。
-
-```csv
-# Username, AccessKey, SecretKey
-user_01,AK_USER_1,SK_USER_1_SECRET
-user_02,AK_USER_2,SK_USER_2_SECRET
-...
-
-```
-
-### 2. 主配置 (`config.dat`)
-
-#### [Multi-User] 多租户并发
-
-| 参数 | 说明 | 示例 |
-| --- | --- | --- |
-| `Users` | **必须**从 users.dat 加载的用户数量。若文件有效行数少于此值，工具将**报错退出**。 | `5` |
-| `ThreadsPerUser` | 每个用户的并发线程数。**总并发 = Users * ThreadsPerUser**。 | `10` |
-| `BucketNamePrefix` | 动态桶名后缀。桶名格式：`{ak_lower}.{prefix}`。 | `bench.test` |
-| `BucketNameFixed` | (可选) 若设置，所有用户强制使用该固定桶名。 | `my-fixed-bucket` |
-
-#### [Security] 安全与国密
-
-| 参数 | 说明 | 示例 |
-| --- | --- | --- |
-| `GmModeSwitch` | 开启国密模式 (true/false)。开启后会校验 SSL 版本配置。 | `false` |
-| `SslMinVersion` | SSL 最小版本 (1.0, 1.1, 1.2, 1.3)。 | `1.2` |
-| `SslMaxVersion` | SSL 最大版本 (1.0, 1.1, 1.2, 1.3)。需 >= MinVersion。 | `1.3` |
-| `MutualSslSwitch` | 开启双向认证 (true/false)。开启后必须配置证书路径。 | `false` |
-| `ClientCertPath` | 客户端证书路径 (双向认证必填)。 | `./certs/client.crt` |
-| `ClientKeyPath` | 客户端私钥路径 (双向认证必填)。 | `./certs/client.key` |
-| `ClientKeyPassword` | 私钥密码 (可选)。 | `password123` |
-
-#### [TestPlan] 测试计划
-
-| 参数 | 说明 | 示例 |
-| --- | --- | --- |
-| `TestCase` | 201(Put), 202(Get), 204(Del), 216(Multipart), 230(Resumable), 900(Mix) | `201` |
-| `RunSeconds` | 压测持续时间(秒)。0 表示按请求次数运行。 | `60` |
-| `RequestsPerThread` | 每个线程的最大请求数 (当 RunSeconds=0 时生效)。 | `1000` |
-| `MixOperation` | 混合模式操作序列 (逗号分隔)。 | `201,202,204` |
-| `MixLoopCount` | 混合模式大循环次数。 | `100` |
-
----
-
-## 🚀 运行测试
-
-### 1. 手动运行
+### 编译命令
 
 ```bash
-# 编译
+# 清理历史产物
+make clean_objs
+
+# 编译标准版 (连接真实 OBS 环境)
 make
 
-# 运行 (默认读取 config.dat)
-./obs_c_bench
-
-# 运行 (CLI 强制覆盖 TestCase，例如强制跑混合模式)
-./obs_c_bench 900
+# 编译 Mock 版 (仅用于联调逻辑，不发起真实网络请求)
+make mock
 
 ```
 
-### 2. 自动化冒烟测试
-
-使用 Python 脚本一键验证 4 种编译模式，确保代码在不同环境下的健壮性。
-
-```bash
-python3 compile_and_smoke_test.py
-
-```
-
-* 脚本会自动生成临时测试文件 (`test_data.bin`)。
-* 自动捕获 `Failed` 计数，任何失败都会导致测试中止。
-* 执行顺序：`Mock` -> `Standard` -> `Mock_ASan` -> `ASan` (Fail-Fast 策略)。
+编译成功后，将在根目录生成可执行文件 `obs_c_bench`（或 `obs_c_bench_mock`）。
 
 ---
 
-## 📂 目录结构
+## 🚀 快速开始 (Quick Start)
+
+### 1. 配置凭证 (`users.dat`)
+
+在根目录创建或编辑 `users.dat`，配置需要参与压测的账户信息（格式：`用户名, AK, SK`）：
 
 ```text
-.
-├── src/                # 源代码
-│   ├── main.c          # 入口、多租户调度、结果统计
-│   ├── worker.c        # 核心压测循环
-│   ├── obs_adapter.c   # SDK 适配层 (含国密/SSL配置注入)
-│   ├── mock_sdk.c      # 仿真 SDK 实现 (用于 mock 模式)
-│   ├── config_loader.c # 配置文件解析与强校验逻辑
-│   ├── log.c           # 日志模块
-│   └── bench.h         # 核心头文件
-├── include/            # SDK 头文件 (eSDKOBS.h, mock_eSDKOBS.h)
-├── lib/                # 依赖库 (libeSDKOBS.so)
-├── logs/               # 运行时日志
-├── config.dat          # 主配置文件
-├── users.dat           # 用户凭证文件
-├── Makefile            # 构建脚本
-├── compile_and_smoke_test.py # 自动化测试脚本
-└── README.md           # 说明文档
+user1, YOUR_AK_1, YOUR_SK_1
+user2, YOUR_AK_2, YOUR_SK_2
 
 ```
 
-## ⚠️ 注意事项
+### 2. 调整测试计划 (`config.dat`)
 
-1. **全局 AK/SK 已移除**: 不要在 `config.dat` 中寻找 AK/SK 配置，必须使用 `users.dat`。
-2. **国密模式依赖**: 开启 `GmModeSwitch=true` 前，请确认链接的 `libeSDKOBS.so` 是支持国密算法的版本，否则可能会在运行时报错或回退。
-3. **性能调优**: 在高并发场景 (`Total Threads > 1000`) 下，请确保操作系统 `ulimit -n` (文件句柄) 和 `ulimit -u` (进程数) 已适当调大。
+编辑 `config.dat`，设置目标 Endpoint、并发量及测试动作。核心参数如下：
+
+* `Users=1`：加载 `users.dat` 中的几个用户。
+* `ThreadsPerUser=1000`：每个用户启动的并发线程数。
+* `TestCase=201`：压测动作 (201=PUT, 202=GET, 204=DELETE, 216=MULTIPART, 230=RESUMABLE, 900=MIX)。
+* `ObjectSize=4096`：测试对象的大小 (支持范围配置，如 `1024~4096`)。
+* `RequestsPerThread=10000` 或 `RunSeconds=300`：退出条件限制。
+
+*(注：详细配置说明请参考 `config.dat` 文件内的中文注释)*
+
+### 3. 执行压测
+
+工具默认读取当前目录下的 `config.dat`：
+
+```bash
+./obs_c_bench
+
+```
+
+也可通过 CLI 参数快速覆盖 TestCase，方便脚本串联执行 (例如先跑 201 PUT，再跑 202 GET)：
+
+```bash
+./obs_c_bench 201
+./obs_c_bench 202
+
+```
+
+---
+
+## 📊 日志与数据可视化 (Logging & Visualization)
+
+当您在 `config.dat` 中配置了 `EnableDetailLog=true` 后，工具将为您提供企业级的分析能力。
+
+每次运行结束后，工具会在 `logs/` 目录下生成一个**任务专属文件夹**（如 `logs/task_20260224_123045`），目录结构如下：
+
+* `brief.txt`: 全局配置与最终汇总报告（包含总 TPS、带宽及各维度错误码统计）。
+* `realtime.txt`: 每 3 秒一次的监控采样快照。
+* `detail_X_partY.csv`: 高性能、多线程切割的请求级流水明细。
+
+### 一键生成分析看板
+
+请确保系统已安装必要的 Python 库：
+
+```bash
+pip install pandas matplotlib numpy
+
+```
+
+**Step 1. 合并流水并计算长尾指标**
+
+```bash
+python3 merge_details.py
+
+```
+
+*该脚本将自动寻找最新的 task 目录，将所有线程的分片流水按绝对时间线合并为单一的 `detail.csv`，并在控制台输出平均时延与 P99 时延。*
+
+**Step 2. 生成可视化 Dashboard**
+
+```bash
+python3 plot_report.py
+
+```
+
+*该脚本读取 `detail.csv`，并在对应 task 目录下生成 `dashboard.png`。图中包含：*
+
+1. **Latency Scatter & Trend**: 请求时延散点分布与 1秒级移动平均线（检测系统抖动毛刺）。
+2. **Latency CDF**: 时延累积概率分布及 P90/P99 水位线。
+3. **Instant TPS & Bandwidth**: 瞬时 TPS 与吞吐带宽的双 Y 轴趋势图（检测性能掉底现象）。
+4. **Status Code Distribution**: HTTP 状态码及错误分类环形占比图。
+
+---
+
+## ⚠️ 注意事项 (Notes)
+
+1. **ULIMIT 限制**：在进行高并发（如 >1000 线程）压测前，请确保操作系统已提升文件句柄上限（`ulimit -n 655350`），否则由于套接字枯竭会导致大量 SDK 内部错误。
+2. **网卡与带宽**：压测极致吞吐时，请监控压测机本地的网卡带宽使用率（通过 `sar -n DEV 1` 或 `nload`），避免因客户端网卡跑满导致的时延虚高。
+3. **大容量日志**：长稳压测（如 7x24 小时）开启 `EnableDetailLog=true` 会占用显著的磁盘空间（尽管已实现自动轮转切割）。请确保压测机所在磁盘空间充足。

@@ -1,108 +1,83 @@
-################################################################
-# OBS C SDK Benchmark Tool Configuration File
-# 
-# Lines starting with '#' are comments.
-# Key=Value format. Spaces around '=' are ignored.
-################################################################
+# ==============================================================
+#      OBS C SDK Benchmark Configuration File
+# ==============================================================
 
-# --- Basic Connection Settings ---
-# OBS Endpoint (e.g., obs.ap-southeast-1.myhuaweicloud.com)
+# --------------------------------------------------------------
+# 1. 环境与基础网络配置 (Environment & Network)
+# --------------------------------------------------------------
 Endpoint=obs.ap-southeast-1.myhuaweicloud.com
-
-# Protocol: http or https
 Protocol=https
-
-# Enable HTTP Keep-Alive (true/false)
 KeepAlive=true
-
-# --- Logging ---
-# Levels: DEBUG, INFO, WARN, ERROR, OFF
 LogLevel=INFO
 
-# --- Concurrency & Users ---
-# Number of concurrent users (must match users.dat)
+# --------------------------------------------------------------
+# 2. 并发与用户、桶配置 (Concurrency & Users)
+# --------------------------------------------------------------
+# 加载 users.dat 中的前 N 个用户
 Users=1
+# 每个用户启动的线程数 (总线程数 = Users * ThreadsPerUser)
+ThreadsPerUser=1000
 
-# Number of threads per user (Total Threads = Users * ThreadsPerUser)
-ThreadsPerUser=10
-
-# --- Bucket Naming Strategy ---
-# 1. BucketNameFixed: If set, all threads use this single bucket.
-# 2. BucketNamePrefix: If Fixed is empty, bucket = {ak_lowercase}.{prefix}
-BucketNamePrefix=bench.test
+# 智能桶名生成规则：
+# - 最高优先级: BucketNameFixed (如果不为空，所有请求都强制打向这个桶)
+# - 次优先级: {当前用户AK小写}.{BucketNamePrefix}
 BucketNameFixed=
+BucketNamePrefix=bench.test
 
-# --- Test Case Selection ---
-# 201: PUT (Upload)
-# 202: GET (Download)
-# 204: DELETE
-# 216: MULTIPART UPLOAD
-# 230: RESUMABLE UPLOAD (UploadFile)
-# 900: MIXED MODE (See MixOperation)
+# --------------------------------------------------------------
+# 3. 压测用例与执行计划 (Test Plan & Mode)
+# --------------------------------------------------------------
+# 测试用例: 201=PUT, 202=GET, 204=DELETE, 216=MULTIPART, 230=RESUMABLE, 900=MIX
 TestCase=201
 
-# --- Operation Settings ---
-
-# Run Mode:
-# 1. Time-based: Set RunSeconds > 0 (e.g., 60). Tool stops after 60s.
-# 2. Count-based: Set RunSeconds = 0 and RequestsPerThread > 0.
-# 3. Dual Constraint: Set both. Tool stops whichever comes first.
+# 退出条件配置 (二选一，如果都配置则谁先满足谁退出)
+# RunSeconds: 按时间限制运行 (留空或 0 表示不限时)
 RunSeconds=
+# RequestsPerThread: 按每个线程的请求量限制 (留空或 0 表示不限制)
 RequestsPerThread=2
 
-# Object Size (in bytes):
-# Format 1: Fixed size (e.g., 1048576)
-# Format 2: Range (e.g., 4096~104857600). Tool picks a random size for each request.
-ObjectSize=4096 
-
-# Range Download Options (Only for TestCase=202):
-# Randomly selected for each GET request. Separated by ';'.
-# Examples: 0-9; 100-200; -512; 1024-
-# Leave empty to download the full object.
-Range=
-
-# Multipart / Resumable Settings
-PartSize=5242880
-
-# --- Naming Pattern ---
-# Object Key Prefix (e.g., obj)
-KeyPrefix=obj
-
-# Add hash to object name to disperse naming (true/false)
-# Pattern: {username}-{hash}-{prefix}-{threadId}
-ObjNamePatternHash=true
-
-# --- Mixed Mode Settings (TestCase=900) ---
-# Operation sequence (e.g., 201,202,204)
+# 混合操作配置 (仅在 TestCase=900 或通过 CLI 强制开启混压时生效)
 MixOperation=201,202,204
-# How many loops of the sequence to run per thread
 MixLoopCount=1
 
-# --- Data Integrity ---
-# Enable Data Validation (true/false)
-# Uses Scheme 3 (Circular Buffer LCG) for high-performance in-memory validation.
-# NOTE: Set to false for Mock testing or max performance.
+# --------------------------------------------------------------
+# 4. 对象与数据属性 (Object Settings)
+# --------------------------------------------------------------
+# 支持固定大小 (如 4096) 或动态大小范围 (如 1024~4096)
+ObjectSize=4096 
+PartSize=5242880
+KeyPrefix=obj
+
+# true: 开启 LCG 伪随机哈希前缀，避免对象名线性累加导致存储热点
+ObjNamePatternHash=true
+
+# Range 下载参数 (分号隔开，GET 请求随机从中挑选。如: 0-1023; 1024-2047)
+Range=
+
+# --------------------------------------------------------------
+# 5. 断点续传与数据校验 (File & Validation)
+# --------------------------------------------------------------
+# 开启下载时的数据异构一致性校验 (零拷贝环形缓冲比对)
 EnableDataValidation=false
 
-# --- Resumable Upload (TestCase=230) ---
-# Path to local file for upload (will be auto-generated if missing)
+# 开启 RESUMABLE 上传时的本地文件生成与断点目录开关
 UploadFilePath=./test_data.bin
-# Enable Checkpoint mechanism
 EnableCheckpoint=true
 
-# --- Security & SSL (Advanced) ---
-# GM (GuoMi) Mode Switch (true/false)
+# --------------------------------------------------------------
+# 6. 安全与加密 (Security & TLS)
+# --------------------------------------------------------------
 GmModeSwitch=false
-
-# SSL Versions: 1.0, 1.1, 1.2, 1.3
 SslMinVersion=1.2
 SslMaxVersion=1.3
 
-# Mutual SSL Authentication (true/false)
 MutualSslSwitch=false
 ClientCertPath=
 ClientKeyPath=
 ClientKeyPassword=
 
-
+# --------------------------------------------------------------
+# 7. 监控与日志记录 (Logging & Monitor)
+# --------------------------------------------------------------
+# true: 开启请求级明细流水记录，将生成按任务归档的 detail.csv
 EnableDetailLog=true
