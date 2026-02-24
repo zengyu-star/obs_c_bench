@@ -13,24 +13,18 @@
 #endif
 #define OBS_SSLVERSION_TLSv1_3 ((1 << 16) | 3)
 
-// [修改] 辅助函数：去除字符串首尾的空白字符
 static char* trim_both(char *s) {
     if (!s) return NULL;
-    
-    // 1. 去除尾部空白
     char *end = s + strlen(s) - 1;
     while (end > s && isspace((unsigned char)*end)) {
         *end = '\0';
         end--;
     }
-    
-    // 2. 去除首部空白
     char *start = s;
     while (*start && isspace((unsigned char)*start)) {
         start++;
     }
-    
-    return start; // 返回新的起始指针
+    return start; 
 }
 
 static int parse_mix_ops(const char *val, int *ops, int max_ops) {
@@ -39,7 +33,6 @@ static int parse_mix_ops(const char *val, int *ops, int max_ops) {
     if (!temp) return 0;
     char *token = strtok(temp, ",");
     while (token != NULL && count < max_ops) {
-        // [修改] 增加 token trim
         char *clean_token = trim_both(token);
         if (strlen(clean_token) == 0) {
              token = strtok(NULL, ",");
@@ -112,7 +105,6 @@ int load_config(const char *filename, Config *cfg) {
         return -1;
     }
     
-    // 默认值设置
     strcpy(cfg->protocol, "https");
     cfg->keep_alive = 1;
     cfg->part_size = 5 * 1024 * 1024;
@@ -136,6 +128,9 @@ int load_config(const char *filename, Config *cfg) {
     cfg->client_key_password[0] = '\0';
     cfg->enable_data_validation = 0;
     
+    // [新增] 默认不开启 detail log
+    cfg->enable_detail_log = 0;
+    
     cfg->object_size_min = cfg->object_size_max = 1024;
     cfg->is_dynamic_size = 0;
     
@@ -147,7 +142,6 @@ int load_config(const char *filename, Config *cfg) {
     char line[512];
 
     while (fgets(line, sizeof(line), fp)) {
-        // [修改] 先清洗整行
         char *clean_line = trim_both(line);
         if (clean_line[0] == '#' || clean_line[0] == '[' || strlen(clean_line) == 0) continue;
 
@@ -155,7 +149,6 @@ int load_config(const char *filename, Config *cfg) {
         if (!eq) continue;
         *eq = '\0';
         
-        // [关键修改] 同时清洗 Key 和 Value，消除空格影响
         char *key = trim_both(clean_line);
         char *val = trim_both(eq + 1);
 
@@ -163,10 +156,7 @@ int load_config(const char *filename, Config *cfg) {
         else if (strcmp(key, "Protocol") == 0) strcpy(cfg->protocol, val);
         else if (strcmp(key, "KeepAlive") == 0) cfg->keep_alive = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "LogLevel") == 0) cfg->log_level = log_level_from_string(val);
-        
-        // [修正点] 现在 val 已经被 trim 过了，" true" 会变成 "true"，strcasecmp 能正确识别
         else if (strcmp(key, "ObjNamePatternHash") == 0) cfg->obj_name_pattern_hash = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
-        
         else if (strcmp(key, "EnableCheckpoint") == 0) cfg->enable_checkpoint = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "UploadFilePath") == 0) strcpy(cfg->upload_file_path, val);
         else if (strcmp(key, "BucketNamePrefix") == 0) strcpy(cfg->bucket_name_prefix, val);
@@ -183,8 +173,7 @@ int load_config(const char *filename, Config *cfg) {
                 cfg->object_size_min = atoll(val);
                 cfg->object_size_max = atoll(tilde + 1);
                 if (cfg->object_size_min > cfg->object_size_max) {
-                    printf("[Config Error] Invalid ObjectSize range: min (%lld) > max (%lld).\n", 
-                           cfg->object_size_min, cfg->object_size_max);
+                    printf("[Config Error] Invalid ObjectSize range.\n");
                     fclose(fp); return -1;
                 }
                 cfg->is_dynamic_size = 1;
@@ -195,7 +184,6 @@ int load_config(const char *filename, Config *cfg) {
                 cfg->object_size = cfg->object_size_max;
             }
         }
-        
         else if (strcmp(key, "Range") == 0) {
             char *temp = strdup(val);
             if (temp) {
@@ -213,7 +201,6 @@ int load_config(const char *filename, Config *cfg) {
                 free(temp);
             }
         }
-
         else if (strcmp(key, "PartSize") == 0) cfg->part_size = atoll(val);
         else if (strcmp(key, "KeyPrefix") == 0) strcpy(cfg->key_prefix, val);
         else if (strcmp(key, "MixOperation") == 0) cfg->mix_op_count = parse_mix_ops(val, cfg->mix_ops, MAX_MIX_OPS);
@@ -227,6 +214,9 @@ int load_config(const char *filename, Config *cfg) {
         else if (strcmp(key, "ClientKeyPath") == 0) strcpy(cfg->client_key_path, val);
         else if (strcmp(key, "ClientKeyPassword") == 0) strcpy(cfg->client_key_password, val);
         else if (strcmp(key, "EnableDataValidation") == 0) cfg->enable_data_validation = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
+        
+        // [新增] 解析 EnableDetailLog
+        else if (strcmp(key, "EnableDetailLog") == 0) cfg->enable_detail_log = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
     }
     
     if (cfg->part_size <= 0) cfg->part_size = 5 * 1024 * 1024; 
@@ -237,24 +227,6 @@ int load_config(const char *filename, Config *cfg) {
 
     cfg->ssl_min_version = parse_ssl_version_str(ssl_min_str, 1);
     cfg->ssl_max_version = parse_ssl_version_str(ssl_max_str, 0);
-
-    if (cfg->gm_mode_switch) {
-        if (cfg->ssl_min_version == -1 || cfg->ssl_max_version == -1) {
-            printf("[Config Error] Invalid SslMin/MaxVersion.\n");
-            fclose(fp); return -1;
-        }
-        if (cfg->ssl_min_version > cfg->ssl_max_version) {
-            printf("[Config Error] SslMinVersion > SslMaxVersion.\n");
-            fclose(fp); return -1;
-        }
-    }
-
-    if (cfg->mutual_ssl_switch) {
-        if (strlen(cfg->client_cert_path) == 0 || strlen(cfg->client_key_path) == 0) {
-            printf("[Config Error] ClientCertPath/KeyPath required for MutualSsl.\n");
-            fclose(fp); return -1;
-        }
-    }
 
     if (load_users_file("users.dat", cfg) < 0) {
         fclose(fp); return -1;
@@ -271,24 +243,14 @@ int load_config(const char *filename, Config *cfg) {
     } else {
         cfg->use_mix_mode = 0;
     }
-    
-    int need_check_file = 0;
-    if (cfg->test_case == TEST_CASE_RESUMABLE) need_check_file = 1;
-    if (cfg->use_mix_mode) {
-        for(int i=0; i<cfg->mix_op_count; i++) if(cfg->mix_ops[i] == TEST_CASE_RESUMABLE) need_check_file = 1;
-    }
-
-    if (need_check_file && strlen(cfg->upload_file_path) == 0) {
-        printf("[ERROR] UploadFilePath cannot be empty for Resumable test.\n");
-        fclose(fp); return -1;
-    }
 
     if (cfg->enable_data_validation) {
-        printf("[Config] Data Validation: ENABLED (Scheme 3: In-Memory/File Isomorphic Verification)\n");
+        printf("[Config] Data Validation: ENABLED\n");
     }
     
-    if (cfg->is_dynamic_size) {
-        printf("[Config] Dynamic Object Size: %lld ~ %lld bytes\n", cfg->object_size_min, cfg->object_size_max);
+    // [新增] 打印日志启用状态
+    if (cfg->enable_detail_log) {
+        printf("[Config] Detail Request Log: ENABLED\n");
     }
 
     fclose(fp);

@@ -29,11 +29,24 @@
 #define MAX_MIX_OPS 32 
 #define MAX_RANGE_OPTIONS 64 
 
+// [新增] 批量落盘大小
+#define BATCH_SIZE 1000
+
 typedef struct {
     char username[64];
     char ak[128];
     char sk[128];
 } UserCredential;
+
+// [新增] 请求流水记录结构体
+typedef struct {
+    double timestamp_s;
+    int op_type;
+    char key[256];
+    double latency_ms;
+    int status_code;
+    long long bytes;
+} ReqRecord;
 
 typedef struct {
     char endpoint[256];
@@ -91,8 +104,10 @@ typedef struct {
     char client_key_path[256];
     char client_key_password[256];
 
-    // --- 数据校验 ---
+    // --- 数据校验与日志 ---
     int enable_data_validation;
+    int enable_detail_log;      // [新增] 是否开启 detail.csv 流水日志
+    char task_log_dir[256];     // [新增] 本次压测的独立日志目录路径
 
 } Config;
 
@@ -100,15 +115,15 @@ typedef struct {
     long long success_count;    
     
     // [详细错误统计]
-    long long fail_403_count;   // Forbidden
-    long long fail_404_count;   // NotFound
-    long long fail_409_count;   // Conflict/AlreadyExists
-    long long fail_4xx_other_count; // 其他客户端错误
-    long long fail_5xx_count;   // 服务端错误
-    long long fail_other_count; // 网络/SDK通用错误
-    long long fail_validation_count; // 数据校验错误 (DataConsistencyError)
+    long long fail_403_count;   
+    long long fail_404_count;   
+    long long fail_409_count;   
+    long long fail_4xx_other_count; 
+    long long fail_5xx_count;   
+    long long fail_other_count; 
+    long long fail_validation_count; 
 
-    long long total_success_bytes; // 累计流量
+    long long total_success_bytes; 
 
     double total_latency_ms;
     double max_latency_ms;
@@ -137,7 +152,6 @@ int load_config(const char *filename, Config *cfg);
 void *worker_routine(void *arg);
 void fill_pattern_buffer(char *buf, size_t size, int seed);
 
-// 报告函数声明
 void save_benchmark_report(Config *cfg, long long total, 
                            long long success, long long fail, 
                            long long f403, long long f404, long long f409, long long f4other,

@@ -4,6 +4,9 @@
 
 #define PATTERN_BUF_SIZE (1 * 1024 * 1024)
 
+// [新增] 定义每个分片文件的最大行数（100万行约占用 60MB~80MB 磁盘空间）
+#define MAX_ROWS_PER_FILE 1000000
+
 void fill_pattern_buffer(char *buf, size_t size, int seed) {
     unsigned int s = seed;
     const unsigned int A = 1664525;
@@ -28,90 +31,86 @@ void *worker_routine(void *arg) {
         return NULL;
     }
 
-    // 用于数据内容的随机数种子
     unsigned int thread_seed = (unsigned int)(time(NULL) ^ (long)pthread_self());
+
+    // --- 初始化 Detail 日志与分片状态 ---
+    FILE *detail_fp = NULL;
+    ReqRecord *batch_buffer = NULL;
+    int batch_count = 0;
+    
+    int file_part_idx = 0;
+    long long total_written_rows = 0;
+    char detail_filename[512];
+
+    if (args->config->enable_detail_log) {
+        snprintf(detail_filename, sizeof(detail_filename), "%s/detail_%d_part%d.csv", 
+                 args->config->task_log_dir, args->thread_id, file_part_idx);
+        detail_fp = fopen(detail_filename, "w");
+        if (detail_fp) {
+            fprintf(detail_fp, "Timestamp(s),OpType,Key,Latency(ms),StatusCode,Bytes\n");
+            batch_buffer = (ReqRecord *)malloc(sizeof(ReqRecord) * BATCH_SIZE);
+        } else {
+            LOG_ERROR("Thread %d failed to create detail log file.", args->thread_id);
+        }
+    }
 
     obs_status status = OBS_STATUS_OK;
     int op_index = 0;
     
     while (1) {
         // --- 1. 时间/配额检查 ---
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
-        double now_ms = ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
-        if (now_ms >= args->stop_timestamp_ms) {
-            LOG_INFO("Thread %d reaching RunSeconds limit. Stopping...", args->thread_id);
-            break;
-        }
+        struct timespec ts_now;
+        clock_gettime(CLOCK_MONOTONIC_COARSE, &ts_now);
+        double now_ms = ts_now.tv_sec * 1000.0 + ts_now.tv_nsec / 1000000.0;
+        if (now_ms >= args->stop_timestamp_ms) break;
 
         if (args->config->requests_per_thread > 0) {
             long long current_requests = args->stats.success_count + 
-                                         args->stats.fail_403_count + 
-                                         args->stats.fail_404_count + 
-                                         args->stats.fail_409_count + 
-                                         args->stats.fail_4xx_other_count + 
-                                         args->stats.fail_5xx_count + 
-                                         args->stats.fail_other_count +
+                                         args->stats.fail_403_count + args->stats.fail_404_count + 
+                                         args->stats.fail_409_count + args->stats.fail_4xx_other_count + 
+                                         args->stats.fail_5xx_count + args->stats.fail_other_count +
                                          args->stats.fail_validation_count;
-
-            if (current_requests >= args->config->requests_per_thread) {
-                LOG_INFO("Thread %d finished its quota (%d requests). Stopping early.", 
-                         args->thread_id, args->config->requests_per_thread);
-                break;
-            }
+            if (current_requests >= args->config->requests_per_thread) break;
         }
         
         // --- 2. 动态参数准备 ---
-        // A. 随机对象大小
-        long long current_req_size;
-        if (args->config->is_dynamic_size) {
-            current_req_size = args->config->object_size_min + 
-                               (rand_r(&thread_seed) % (args->config->object_size_max - args->config->object_size_min + 1));
-        } else {
-            current_req_size = args->config->object_size_max;
-        }
+        long long current_req_size = args->config->is_dynamic_size ? 
+            (args->config->object_size_min + (rand_r(&thread_seed) % (args->config->object_size_max - args->config->object_size_min + 1))) : 
+            args->config->object_size_max;
 
-        // B. 混合模式判断
         int current_case = args->config->test_case;
         if (args->config->use_mix_mode) {
-             if (op_index >= args->config->mix_op_count * args->config->mix_loop_count) {
-                 LOG_INFO("Thread %d finished mix operations. Stopping early.", args->thread_id);
-                 break;
-             }
+             if (op_index >= args->config->mix_op_count * args->config->mix_loop_count) break;
              current_case = args->config->mix_ops[op_index % args->config->mix_op_count];
         }
 
-        // C. Key 生成 (优化：使用 LCG 伪随机算法)
         char key[256];
         if (args->config->obj_name_pattern_hash) {
-             // 使用 LCG (Linear Congruential Generator) 算法
-             // 参数来源：glibc rand() 实现标准 (Multiplier: 1103515245, Increment: 12345)
-             // 优势：极高性能（仅1次乘法1次加法），且能将顺序输入（0,1,2）转化为伪随机分布
              unsigned int seed_val = (unsigned int)(args->thread_id + op_index);
              unsigned int lcg_hash = (seed_val * 1103515245 + 12345) & 0x7FFFFFFF;
-             
-             // 取模 10000 得到 0000-9999 的前缀
              int hash_prefix = lcg_hash % 10000;
-
-             // Pattern: {hash}-{username}-{prefix}-{threadId}
              snprintf(key, sizeof(key), "%04d-%s-%s-%d", hash_prefix, args->username, args->config->key_prefix, args->thread_id);
         } else {
-             // 默认模式: {username}-{prefix}-{threadId}
              snprintf(key, sizeof(key), "%s-%s-%d", args->username, args->config->key_prefix, args->thread_id);
         }
 
-        // --- 3. 执行请求 ---
-        
-        // [关键] 记录执行前的校验失败次数，用于后续排重
         long long prev_val_count = args->stats.fail_validation_count;
 
+        // 记录请求绝对时间戳和高精度开始时间
+        struct timeval tv_abs;
+        gettimeofday(&tv_abs, NULL);
+        double abs_timestamp = tv_abs.tv_sec + tv_abs.tv_usec / 1000000.0;
+
+        struct timespec ts_start, ts_end;
+        clock_gettime(CLOCK_MONOTONIC, &ts_start);
+
+        // --- 3. 执行请求 ---
         switch(current_case) {
             case TEST_CASE_PUT:
                 status = run_put_benchmark(args, key, current_req_size);
                 break;
             case TEST_CASE_GET:
                 {
-                    // 随机 Range 选择
                     char *selected_range = NULL;
                     if (args->config->range_count > 0) {
                         int r_idx = rand_r(&thread_seed) % args->config->range_count;
@@ -134,43 +133,84 @@ void *worker_routine(void *arg) {
                 break;
         }
 
+        // 高精度耗时计算
+        clock_gettime(CLOCK_MONOTONIC, &ts_end);
+        double latency_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 + (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+
+        // --- 流水批量写入逻辑与分片轮转 ---
+        if (detail_fp && batch_buffer) {
+            batch_buffer[batch_count].timestamp_s = abs_timestamp;
+            batch_buffer[batch_count].op_type = current_case;
+            snprintf(batch_buffer[batch_count].key, sizeof(batch_buffer[batch_count].key), "%s", key);
+            batch_buffer[batch_count].latency_ms = latency_ms;
+            batch_buffer[batch_count].status_code = status;
+            batch_buffer[batch_count].bytes = current_req_size;
+            batch_count++;
+
+            // 达到阈值进行 Block Write
+            if (batch_count >= BATCH_SIZE) {
+                for (int i = 0; i < batch_count; i++) {
+                    fprintf(detail_fp, "%.3f,%d,%s,%.2f,%d,%lld\n",
+                            batch_buffer[i].timestamp_s, batch_buffer[i].op_type, 
+                            batch_buffer[i].key, batch_buffer[i].latency_ms, 
+                            batch_buffer[i].status_code, batch_buffer[i].bytes);
+                }
+                
+                total_written_rows += batch_count;
+                batch_count = 0; // 重置缓冲游标
+                
+                // --- [新增] 文件分片滚动轮转逻辑 ---
+                if (total_written_rows >= MAX_ROWS_PER_FILE) {
+                    fclose(detail_fp);
+                    file_part_idx++;
+                    total_written_rows = 0;
+                    
+                    snprintf(detail_filename, sizeof(detail_filename), "%s/detail_%d_part%d.csv", 
+                             args->config->task_log_dir, args->thread_id, file_part_idx);
+                    detail_fp = fopen(detail_filename, "w");
+                    if (detail_fp) {
+                        fprintf(detail_fp, "Timestamp(s),OpType,Key,Latency(ms),StatusCode,Bytes\n");
+                    } else {
+                        LOG_ERROR("Thread %d failed to roll detail log file.", args->thread_id);
+                    }
+                }
+            }
+        }
+
         // --- 4. 统计归类 ---
         if (status == OBS_STATUS_OK) {
             args->stats.success_count++;
-            // PUT 操作在此处累加流量，GET 操作在 adapter 中累加
             if (current_case == TEST_CASE_PUT) {
                 args->stats.total_success_bytes += current_req_size;
             }
         } else {
-            // [关键] 检查是否发生了校验错误
-            // 如果 adapter 内部已经增加了校验失败计数，则在此处跳过归类
-            // 避免 status == InternalError 时被误判为 Net/SDK Error
             if (args->stats.fail_validation_count > prev_val_count) {
-                // 已处理为 DataConsistencyError，不做额外计数
+                // 已处理为校验错误
             } 
-            else if (status == OBS_STATUS_AccessDenied) {
-                args->stats.fail_403_count++;
-            } 
-            else if (status == OBS_STATUS_NoSuchBucket || status == OBS_STATUS_NoSuchKey || status == OBS_STATUS_NoSuchUpload) {
-                args->stats.fail_404_count++;
-            } 
-            else if (status == OBS_STATUS_BucketAlreadyExists || status == OBS_STATUS_BucketNotEmpty) {
-                args->stats.fail_409_count++;
-            } 
-            else if (status >= 400 && status < 500) {
-                args->stats.fail_4xx_other_count++;
-            } 
-            else if (status >= 500 && status < 600) {
-                args->stats.fail_5xx_count++;
-            } 
-            else {
-                // 真正的网络或SDK内部错误
-                args->stats.fail_other_count++;
-            }
+            else if (status == OBS_STATUS_AccessDenied) args->stats.fail_403_count++;
+            else if (status == OBS_STATUS_NoSuchBucket || status == OBS_STATUS_NoSuchKey || status == OBS_STATUS_NoSuchUpload) args->stats.fail_404_count++;
+            else if (status == OBS_STATUS_BucketAlreadyExists || status == OBS_STATUS_BucketNotEmpty) args->stats.fail_409_count++;
+            else if (status >= 400 && status < 500) args->stats.fail_4xx_other_count++;
+            else if (status >= 500 && status < 600) args->stats.fail_5xx_count++;
+            else args->stats.fail_other_count++;
         }
         op_index++;
     }
 
+    // --- 清理缓冲区残余数据 ---
+    if (detail_fp) {
+        if (batch_buffer && batch_count > 0) {
+            for (int i = 0; i < batch_count; i++) {
+                fprintf(detail_fp, "%.3f,%d,%s,%.2f,%d,%lld\n",
+                        batch_buffer[i].timestamp_s, batch_buffer[i].op_type, 
+                        batch_buffer[i].key, batch_buffer[i].latency_ms, 
+                        batch_buffer[i].status_code, batch_buffer[i].bytes);
+            }
+        }
+        fclose(detail_fp);
+    }
+    
+    if (batch_buffer) free(batch_buffer);
     if (args->pattern_buffer) free(args->pattern_buffer);
     return NULL;
 }

@@ -24,7 +24,7 @@ LogLevel=INFO
 Users=1
 
 # Number of threads per user (Total Threads = Users * ThreadsPerUser)
-ThreadsPerUser=1
+ThreadsPerUser=10
 
 # --- Bucket Naming Strategy ---
 # 1. BucketNameFixed: If set, all threads use this single bucket.
@@ -48,12 +48,12 @@ TestCase=201
 # 2. Count-based: Set RunSeconds = 0 and RequestsPerThread > 0.
 # 3. Dual Constraint: Set both. Tool stops whichever comes first.
 RunSeconds=
-RequestsPerThread=1
+RequestsPerThread=2
 
 # Object Size (in bytes):
 # Format 1: Fixed size (e.g., 1048576)
 # Format 2: Range (e.g., 4096~104857600). Tool picks a random size for each request.
-ObjectSize=4096~10485760
+ObjectSize=4096 
 
 # Range Download Options (Only for TestCase=202):
 # Randomly selected for each GET request. Separated by ';'.
@@ -103,3 +103,6 @@ MutualSslSwitch=false
 ClientCertPath=
 ClientKeyPath=
 ClientKeyPassword=
+
+
+EnableDetailLog=true
