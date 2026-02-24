@@ -17,7 +17,7 @@ const char* log_level_to_string(LogLevel level) {
     }
 }
 
-// [修改] 报告输出增加 DataConsistencyError 字段
+// 报告输出
 void save_benchmark_report(Config *cfg, long long total, 
                            long long success, long long fail, 
                            long long f403, long long f404, long long f409, long long f4other,
@@ -95,7 +95,6 @@ void save_benchmark_report(Config *cfg, long long total,
     fprintf(fp, "  |- 4xx (Other):      %lld\n", f4other);
     fprintf(fp, "  |- 5xx (Server):     %lld\n", f5xx);
     fprintf(fp, "  |- Other (Net/SDK):  %lld\n", fother);
-    // [新增] DataConsistencyError
     fprintf(fp, "  |- Other (DataConsistencyError):  %lld\n", fvalidate);
     
     fprintf(fp, "\nPerformance:\n");
@@ -153,6 +152,71 @@ void str_tolower(char *dst, const char *src) {
         dst++; src++;
     }
     *dst = '\0';
+}
+
+// [新增] 监控线程参数结构体
+typedef struct {
+    WorkerArgs *t_args;
+    int thread_count;
+    int interval_sec;
+    volatile int stop_flag;
+} MonitorArgs;
+
+// [新增] 无锁监控线程：每隔 N 秒读取一次所有 Worker 的本地统计数据并打印瞬时指标
+void *monitor_routine(void *arg) {
+    MonitorArgs *m_args = (MonitorArgs *)arg;
+    
+    long long last_total_reqs = 0;
+    long long last_total_bytes = 0;
+    
+    struct timeval last_tv, curr_tv;
+    gettimeofday(&last_tv, NULL);
+
+    while (!m_args->stop_flag) {
+        // 使用 100ms 步进休眠，确保能够极速响应主线程的退出信号
+        for(int i = 0; i < m_args->interval_sec * 10 && !m_args->stop_flag; i++) {
+            usleep(100000); 
+        }
+        if (m_args->stop_flag) break;
+
+        long long current_success = 0;
+        long long current_fail = 0;
+        long long current_bytes = 0;
+
+        // 无锁遍历，性能零损耗
+        for (int i = 0; i < m_args->thread_count; i++) {
+            current_success += m_args->t_args[i].stats.success_count;
+            current_bytes   += m_args->t_args[i].stats.total_success_bytes;
+            current_fail    += (m_args->t_args[i].stats.fail_403_count + 
+                                m_args->t_args[i].stats.fail_404_count + 
+                                m_args->t_args[i].stats.fail_409_count + 
+                                m_args->t_args[i].stats.fail_4xx_other_count + 
+                                m_args->t_args[i].stats.fail_5xx_count + 
+                                m_args->t_args[i].stats.fail_other_count +
+                                m_args->t_args[i].stats.fail_validation_count);
+        }
+
+        long long current_total = current_success + current_fail;
+        gettimeofday(&curr_tv, NULL);
+        double elapsed_s = (curr_tv.tv_sec - last_tv.tv_sec) + (curr_tv.tv_usec - last_tv.tv_usec) / 1000000.0;
+        
+        if (elapsed_s > 0) {
+            long long req_delta = current_total - last_total_reqs;
+            long long bytes_delta = current_bytes - last_total_bytes;
+            
+            double current_tps = req_delta / elapsed_s;
+            double current_throughput = (bytes_delta / 1024.0 / 1024.0) / elapsed_s;
+            double success_rate = current_total > 0 ? ((double)current_success / current_total) * 100.0 : 0.0;
+
+            printf("[Monitor] Interval: %.1fs | Instant TPS: %8.2f | BW: %8.2f MB/s | Success Rate: %6.2f%% | Total Reqs: %lld\n", 
+                   elapsed_s, current_tps, current_throughput, success_rate, current_total);
+        }
+
+        last_total_reqs = current_total;
+        last_total_bytes = current_bytes;
+        last_tv = curr_tv;
+    }
+    return NULL;
 }
 
 int main(int argc, char **argv) {
@@ -261,7 +325,24 @@ int main(int argc, char **argv) {
         }
     }
     
-    for (int i = 0; i < cfg.threads; i++) pthread_join(tids[i], NULL);
+    // [新增] 启动监控线程
+    MonitorArgs m_args;
+    m_args.t_args = t_args;
+    m_args.thread_count = cfg.threads;
+    m_args.interval_sec = 3; 
+    m_args.stop_flag = 0;
+    
+    pthread_t monitor_tid;
+    pthread_create(&monitor_tid, NULL, monitor_routine, &m_args);
+
+    // 等待所有 Worker 完成
+    for (int i = 0; i < cfg.threads; i++) {
+        pthread_join(tids[i], NULL);
+    }
+
+    // [新增] 通知监控线程退出并等待回收
+    m_args.stop_flag = 1;
+    pthread_join(monitor_tid, NULL);
 
     gettimeofday(&end_tv, NULL);
     double actual_time_s = (end_tv.tv_sec - start_tv.tv_sec) + (end_tv.tv_usec - start_tv.tv_usec) / 1000000.0;
@@ -280,7 +361,7 @@ int main(int argc, char **argv) {
         t_4xx += t_args[i].stats.fail_4xx_other_count;
         t_5xx += t_args[i].stats.fail_5xx_count;
         t_other += t_args[i].stats.fail_other_count;
-        t_val += t_args[i].stats.fail_validation_count; // 数据校验错误
+        t_val += t_args[i].stats.fail_validation_count; 
     }
     
     long long total_fail = t_403 + t_404 + t_409 + t_4xx + t_5xx + t_other + t_val;
@@ -289,7 +370,6 @@ int main(int argc, char **argv) {
     double tps = (actual_time_s > 0) ? (total_reqs / actual_time_s) : 0.0;
     double throughput_mb = (total_bytes) / 1024.0 / 1024.0 / actual_time_s;
 
-    // [修改] 输出报告格式，单独展示 DataConsistencyError
     printf("\n--- Test Result ---\n");
     printf("Actual Duration: %.2f s\n", actual_time_s);
     printf("Total Requests:  %lld\n", total_reqs);
@@ -321,4 +401,3 @@ int main(int argc, char **argv) {
     obs_deinitialize();
     return 0;
 }
-
