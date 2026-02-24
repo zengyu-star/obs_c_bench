@@ -7,7 +7,7 @@
 
 static LogLevel g_log_level = LOG_INFO;
 
-// [新增] 线程局部存储
+// 线程局部存储
 static __thread int g_thread_id = -1;
 static __thread char g_username[64] = {0};
 
@@ -15,7 +15,7 @@ void log_init(LogLevel level) {
     g_log_level = level;
 }
 
-// [新增] 设置上下文实现
+// 设置上下文实现
 void log_set_context(int thread_id, const char *username) {
     g_thread_id = thread_id;
     if (username) {
@@ -40,7 +40,10 @@ void log_message(LogLevel level, const char *file, int line, const char *fmt, ..
     if (level < g_log_level) return;
 
     time_t now = time(NULL);
-    struct tm *t = localtime(&now);
+    struct tm t_res;
+    // [修复]：使用线程安全的 localtime_r 替代 localtime，防止并发改写 glibc 静态内存
+    struct tm *t = localtime_r(&now, &t_res);
+    
     char time_buf[64];
     if (t) {
         strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", t);
@@ -57,7 +60,7 @@ void log_message(LogLevel level, const char *file, int line, const char *fmt, ..
         default: break;
     }
 
-    // [新增] 构建上下文前缀
+    // 构建上下文前缀
     char context_buf[128];
     if (g_thread_id >= 0) {
         if (g_username[0] != '\0') {

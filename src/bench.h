@@ -8,6 +8,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <stdbool.h>
+#include <signal.h>
 #include "log.h" 
 
 #ifdef MOCK_SDK_MODE
@@ -17,6 +18,9 @@
     #include "eSDKOBS.h" 
     #define SDK_MODE_DESC "Real Huawei OBS C SDK"
 #endif
+
+// 全局优雅退出标志
+extern volatile sig_atomic_t g_graceful_stop;
 
 // TestCase 编号定义
 #define TEST_CASE_PUT           201
@@ -29,7 +33,7 @@
 #define MAX_MIX_OPS 32 
 #define MAX_RANGE_OPTIONS 64 
 
-// [新增] 批量落盘大小
+// 批量落盘大小
 #define BATCH_SIZE 1000
 
 typedef struct {
@@ -38,7 +42,7 @@ typedef struct {
     char sk[128];
 } UserCredential;
 
-// [新增] 请求流水记录结构体
+// 请求流水记录结构体
 typedef struct {
     double timestamp_s;
     int op_type;
@@ -52,6 +56,10 @@ typedef struct {
     char endpoint[256];
     char protocol[16];
     int keep_alive;
+
+    // --- 超时防卡死配置 ---
+    int connect_timeout_ms;
+    int request_timeout_ms;
 
     // --- 并发与用户配置 ---
     int threads;
@@ -106,15 +114,14 @@ typedef struct {
 
     // --- 数据校验与日志 ---
     int enable_data_validation;
-    int enable_detail_log;      // [新增] 是否开启 detail.csv 流水日志
-    char task_log_dir[256];     // [新增] 本次压测的独立日志目录路径
+    int enable_detail_log;      
+    char task_log_dir[256];     
 
 } Config;
 
 typedef struct {
     long long success_count;    
     
-    // [详细错误统计]
     long long fail_403_count;   
     long long fail_404_count;   
     long long fail_409_count;   

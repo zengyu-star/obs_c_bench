@@ -3,8 +3,6 @@
 #include <sys/syscall.h>
 
 #define PATTERN_BUF_SIZE (1 * 1024 * 1024)
-
-// [新增] 定义每个分片文件的最大行数（100万行约占用 60MB~80MB 磁盘空间）
 #define MAX_ROWS_PER_FILE 1000000
 
 void fill_pattern_buffer(char *buf, size_t size, int seed) {
@@ -33,7 +31,6 @@ void *worker_routine(void *arg) {
 
     unsigned int thread_seed = (unsigned int)(time(NULL) ^ (long)pthread_self());
 
-    // --- 初始化 Detail 日志与分片状态 ---
     FILE *detail_fp = NULL;
     ReqRecord *batch_buffer = NULL;
     int batch_count = 0;
@@ -57,8 +54,8 @@ void *worker_routine(void *arg) {
     obs_status status = OBS_STATUS_OK;
     int op_index = 0;
     
-    while (1) {
-        // --- 1. 时间/配额检查 ---
+    // 增加全局优雅退出判断
+    while (!g_graceful_stop) {
         struct timespec ts_now;
         clock_gettime(CLOCK_MONOTONIC_COARSE, &ts_now);
         double now_ms = ts_now.tv_sec * 1000.0 + ts_now.tv_nsec / 1000000.0;
@@ -73,7 +70,6 @@ void *worker_routine(void *arg) {
             if (current_requests >= args->config->requests_per_thread) break;
         }
         
-        // --- 2. 动态参数准备 ---
         long long current_req_size = args->config->is_dynamic_size ? 
             (args->config->object_size_min + (rand_r(&thread_seed) % (args->config->object_size_max - args->config->object_size_min + 1))) : 
             args->config->object_size_max;
@@ -96,7 +92,6 @@ void *worker_routine(void *arg) {
 
         long long prev_val_count = args->stats.fail_validation_count;
 
-        // 记录请求绝对时间戳和高精度开始时间
         struct timeval tv_abs;
         gettimeofday(&tv_abs, NULL);
         double abs_timestamp = tv_abs.tv_sec + tv_abs.tv_usec / 1000000.0;
@@ -104,7 +99,6 @@ void *worker_routine(void *arg) {
         struct timespec ts_start, ts_end;
         clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
-        // --- 3. 执行请求 ---
         switch(current_case) {
             case TEST_CASE_PUT:
                 status = run_put_benchmark(args, key, current_req_size);
@@ -133,11 +127,9 @@ void *worker_routine(void *arg) {
                 break;
         }
 
-        // 高精度耗时计算
         clock_gettime(CLOCK_MONOTONIC, &ts_end);
         double latency_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 + (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
 
-        // --- 流水批量写入逻辑与分片轮转 ---
         if (detail_fp && batch_buffer) {
             batch_buffer[batch_count].timestamp_s = abs_timestamp;
             batch_buffer[batch_count].op_type = current_case;
@@ -147,7 +139,6 @@ void *worker_routine(void *arg) {
             batch_buffer[batch_count].bytes = current_req_size;
             batch_count++;
 
-            // 达到阈值进行 Block Write
             if (batch_count >= BATCH_SIZE) {
                 for (int i = 0; i < batch_count; i++) {
                     fprintf(detail_fp, "%.3f,%d,%s,%.2f,%d,%lld\n",
@@ -157,9 +148,8 @@ void *worker_routine(void *arg) {
                 }
                 
                 total_written_rows += batch_count;
-                batch_count = 0; // 重置缓冲游标
+                batch_count = 0; 
                 
-                // --- [新增] 文件分片滚动轮转逻辑 ---
                 if (total_written_rows >= MAX_ROWS_PER_FILE) {
                     fclose(detail_fp);
                     file_part_idx++;
@@ -177,7 +167,6 @@ void *worker_routine(void *arg) {
             }
         }
 
-        // --- 4. 统计归类 ---
         if (status == OBS_STATUS_OK) {
             args->stats.success_count++;
             if (current_case == TEST_CASE_PUT) {
@@ -197,7 +186,6 @@ void *worker_routine(void *arg) {
         op_index++;
     }
 
-    // --- 清理缓冲区残余数据 ---
     if (detail_fp) {
         if (batch_buffer && batch_count > 0) {
             for (int i = 0; i < batch_count; i++) {

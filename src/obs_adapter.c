@@ -13,9 +13,8 @@ typedef struct {
     char returned_upload_id[256]; 
     char returned_etag[256];
 
-    // Range 校验支持
-    long long pattern_start_offset; // 校验的起始偏移
-    int skip_validation;            // 是否跳过校验
+    long long pattern_start_offset; 
+    int skip_validation;            
 } transfer_context;
 
 obs_status response_properties_callback(const obs_response_properties *properties, void *callback_data) {
@@ -43,6 +42,9 @@ void response_complete_callback(obs_status status, const obs_error_details *erro
 }
 
 int put_buffer_callback_optimized(int buffer_size, char *buffer, void *callback_data) {
+    // [修复]: 监控到退出信号，立刻返回 -1 强制掐断当前 HTTP 请求
+    if (g_graceful_stop) return -1; 
+    
     transfer_context *ctx = (transfer_context *)callback_data;
     WorkerArgs *args = ctx->args;
     
@@ -63,6 +65,9 @@ int put_buffer_callback_optimized(int buffer_size, char *buffer, void *callback_
 }
 
 obs_status get_buffer_callback_optimized(int buffer_size, const char *buffer, void *callback_data) {
+    // [修复]: 监控到退出信号，立刻返回内部错误码强制掐断数据接收
+    if (g_graceful_stop) return OBS_STATUS_InternalError; 
+
     transfer_context *ctx = (transfer_context *)callback_data;
     WorkerArgs *args = ctx->args;
 
@@ -74,7 +79,6 @@ obs_status get_buffer_callback_optimized(int buffer_size, const char *buffer, vo
     if (ctx->validation_failed) return OBS_STATUS_OK;
     if (!args->pattern_buffer || !buffer) return OBS_STATUS_InternalError;
 
-    // 校验时的 Offset 必须加上 Range 的起始偏移
     long long absolute_pos = ctx->pattern_start_offset + ctx->total_processed;
     long long offset = absolute_pos & args->pattern_mask;
 
@@ -89,7 +93,6 @@ obs_status get_buffer_callback_optimized(int buffer_size, const char *buffer, vo
              ctx->validation_failed = 1;
              LOG_ERROR("[DATA_CORRUPTION] Object: %s, Abs Offset: %lld, Pattern Offset: %lld, Check Len: %d", 
                        args->username, absolute_pos + bytes_checked, offset, to_check);
-             // 返回错误以中断下载
              return OBS_STATUS_InternalError; 
         }
         
@@ -133,6 +136,10 @@ static void setup_options(obs_options *option, WorkerArgs *args) {
     option->bucket_options.access_key = args->effective_ak;
     option->bucket_options.secret_access_key = args->effective_sk;
     option->bucket_options.protocol = (strcasecmp(args->config->protocol, "http") == 0) ? OBS_PROTOCOL_HTTP : OBS_PROTOCOL_HTTPS;
+    
+    option->request_options.connect_time = args->config->connect_timeout_ms;
+    option->request_options.max_connected_time = args->config->request_timeout_ms;
+
     option->request_options.keep_alive = (args->config->keep_alive != 0);
     option->request_options.gm_mode_switch = args->config->gm_mode_switch ? 1 : 0;
     option->request_options.ssl_min_version = args->config->ssl_min_version;
@@ -164,7 +171,6 @@ obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size)
     return ctx.ret_status;
 }
 
-// 解析 Range 并设置 Condition
 static void apply_range_conditions(const char *range_str, obs_get_conditions *cond, transfer_context *ctx) {
     if (!range_str || strlen(range_str) == 0) {
         cond->start_byte = 0;
@@ -178,7 +184,6 @@ static void apply_range_conditions(const char *range_str, obs_get_conditions *co
     
     if (hyphen) {
         if (hyphen == range_str) {
-            // Case: "-200" 
             end = atoll(hyphen + 1);
             cond->start_byte = 0;
             cond->byte_count = end + 1; 
@@ -186,7 +191,6 @@ static void apply_range_conditions(const char *range_str, obs_get_conditions *co
             ctx->skip_validation = 0; 
             
         } else if (*(hyphen + 1) == '\0') {
-            // Case: "9-" 
             *hyphen = '\0';
             start = atoll(range_str);
             cond->start_byte = start;
@@ -194,7 +198,6 @@ static void apply_range_conditions(const char *range_str, obs_get_conditions *co
             ctx->pattern_start_offset = start;
             *hyphen = '-'; 
         } else {
-            // Case: "0-9" 
             *hyphen = '\0';
             start = atoll(range_str);
             end = atoll(hyphen + 1);
@@ -214,10 +217,8 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str) {
     obs_get_conditions conditions;
     init_get_properties(&conditions);
 
-    // 初始化 Context
     transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0};
     
-    // 解析 Range
     if (range_str) {
         char *temp_range = strdup(range_str);
         apply_range_conditions(temp_range, &conditions, &ctx);
@@ -231,7 +232,6 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str) {
 
     get_object(&option, &obj_info, &conditions, NULL, &handler, &ctx);
     
-    // 长度检查：只有在 SDK 成功且有长度信息时才进行
     if (ctx.ret_status == OBS_STATUS_OK && ctx.expected_content_length > 0) {
         if (ctx.total_processed != ctx.expected_content_length) {
             LOG_ERROR("Data Incomplete! Key: %s, Expected: %lld, Got: %lld", 
@@ -241,8 +241,6 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str) {
         }
     }
     
-    // [修复] 优先检查 validation_failed 标记。
-    // 即便 SDK 因为回调返回错误而报 InternalError，只要标记位是 1，就视为数据一致性错误。
     if (ctx.validation_failed) {
         args->stats.fail_validation_count++; 
         return OBS_STATUS_InternalError; 

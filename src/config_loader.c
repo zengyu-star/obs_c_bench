@@ -105,6 +105,10 @@ int load_config(const char *filename, Config *cfg) {
         return -1;
     }
     
+    // 默认超时时间设定
+    cfg->connect_timeout_ms = 10000;  // 默认10秒连接超时
+    cfg->request_timeout_ms = 30000;  // 默认30秒请求超时
+
     strcpy(cfg->protocol, "https");
     cfg->keep_alive = 1;
     cfg->part_size = 5 * 1024 * 1024;
@@ -127,8 +131,6 @@ int load_config(const char *filename, Config *cfg) {
     cfg->client_key_path[0] = '\0';
     cfg->client_key_password[0] = '\0';
     cfg->enable_data_validation = 0;
-    
-    // [新增] 默认不开启 detail log
     cfg->enable_detail_log = 0;
     
     cfg->object_size_min = cfg->object_size_max = 1024;
@@ -155,6 +157,11 @@ int load_config(const char *filename, Config *cfg) {
         if (strcmp(key, "Endpoint") == 0) strcpy(cfg->endpoint, val);
         else if (strcmp(key, "Protocol") == 0) strcpy(cfg->protocol, val);
         else if (strcmp(key, "KeepAlive") == 0) cfg->keep_alive = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
+        
+        // --- 解析超时配置 ---
+        else if (strcmp(key, "ConnectTimeoutMs") == 0) cfg->connect_timeout_ms = atoi(val);
+        else if (strcmp(key, "RequestTimeoutMs") == 0) cfg->request_timeout_ms = atoi(val);
+
         else if (strcmp(key, "LogLevel") == 0) cfg->log_level = log_level_from_string(val);
         else if (strcmp(key, "ObjNamePatternHash") == 0) cfg->obj_name_pattern_hash = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "EnableCheckpoint") == 0) cfg->enable_checkpoint = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
@@ -214,8 +221,6 @@ int load_config(const char *filename, Config *cfg) {
         else if (strcmp(key, "ClientKeyPath") == 0) strcpy(cfg->client_key_path, val);
         else if (strcmp(key, "ClientKeyPassword") == 0) strcpy(cfg->client_key_password, val);
         else if (strcmp(key, "EnableDataValidation") == 0) cfg->enable_data_validation = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
-        
-        // [新增] 解析 EnableDetailLog
         else if (strcmp(key, "EnableDetailLog") == 0) cfg->enable_detail_log = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
     }
     
@@ -247,8 +252,6 @@ int load_config(const char *filename, Config *cfg) {
     if (cfg->enable_data_validation) {
         printf("[Config] Data Validation: ENABLED\n");
     }
-    
-    // [新增] 打印日志启用状态
     if (cfg->enable_detail_log) {
         printf("[Config] Detail Request Log: ENABLED\n");
     }

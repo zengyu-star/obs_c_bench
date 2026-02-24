@@ -5,6 +5,17 @@
 #include <fcntl.h>
 #include <time.h> 
 #include <ctype.h>
+#include <signal.h>
+
+volatile sig_atomic_t g_graceful_stop = 0;
+
+void handle_sigint(int sig) {
+    g_graceful_stop = 1;
+    const char *msg = "\n[WARN] Received SIGINT, initiating graceful shutdown... Please wait for running requests to finish.\n";
+    if (write(STDOUT_FILENO, msg, strlen(msg)) < 0) {
+        // 忽略 write 失败
+    }
+}
 
 const char* log_level_to_string(LogLevel level) {
     switch(level) {
@@ -17,7 +28,6 @@ const char* log_level_to_string(LogLevel level) {
     }
 }
 
-// 报告输出 (修改为 brief.txt)
 void save_benchmark_report(Config *cfg, long long total, 
                            long long success, long long fail, 
                            long long f403, long long f404, long long f409, long long f4other,
@@ -30,13 +40,16 @@ void save_benchmark_report(Config *cfg, long long total,
     if (!fp) return;
 
     time_t now = time(NULL);
-    struct tm *t = localtime(&now);
+    struct tm t_res;
+    struct tm *t = localtime_r(&now, &t_res);
 
     fprintf(fp, "===========================================\n");
     fprintf(fp, "      OBS C SDK Benchmark Execution Report \n");
     fprintf(fp, "===========================================\n");
-    fprintf(fp, "Execution Time:      %04d-%02d-%02d %02d:%02d:%02d\n",
-            t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec);
+    if (t) {
+        fprintf(fp, "Execution Time:      %04d-%02d-%02d %02d:%02d:%02d\n",
+                t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec);
+    }
     
     fprintf(fp, "---------------- Configuration ----------------\n");
     fprintf(fp, "[Environment]\n");
@@ -46,6 +59,8 @@ void save_benchmark_report(Config *cfg, long long total,
     fprintf(fp, "[Network]\n");
     fprintf(fp, "  Protocol:          %s\n", cfg->protocol);
     fprintf(fp, "  KeepAlive:         %s\n", cfg->keep_alive ? "true" : "false");
+    fprintf(fp, "  ConnectTimeout:    %d ms\n", cfg->connect_timeout_ms);
+    fprintf(fp, "  RequestTimeout:    %d ms\n", cfg->request_timeout_ms);
     
     fprintf(fp, "[TestPlan - General]\n");
     fprintf(fp, "  Threads:           %d\n", cfg->threads);
@@ -130,7 +145,6 @@ void str_tolower(char *dst, const char *src) {
     *dst = '\0';
 }
 
-// 监控线程参数结构体
 typedef struct {
     WorkerArgs *t_args;
     int thread_count;
@@ -139,25 +153,26 @@ typedef struct {
     char task_log_dir[256]; 
 } MonitorArgs;
 
-// 无锁监控线程
 void *monitor_routine(void *arg) {
     MonitorArgs *m_args = (MonitorArgs *)arg;
     
-    // 打开 realtime.txt
     char rt_filepath[512];
     snprintf(rt_filepath, sizeof(rt_filepath), "%s/realtime.txt", m_args->task_log_dir);
     FILE *rt_fp = fopen(rt_filepath, "w");
     if (rt_fp) {
-        fprintf(rt_fp, "RunTime(s),Cumul_TPS,Cumul_BW(MB/s),Success_Rate(%%),Total_Reqs\n");
+        // [新增]: 表头增加 Process(%)
+        fprintf(rt_fp, "RunTime(s),Process(%%),Cumul_TPS,Cumul_BW(MB/s),Success_Rate(%%),Total_Reqs\n");
         fflush(rt_fp);
     }
 
     struct timeval start_tv, curr_tv;
     gettimeofday(&start_tv, NULL);
 
-    while (!m_args->stop_flag) {
-        for(int i = 0; i < m_args->interval_sec * 10 && !m_args->stop_flag; i++) usleep(100000); 
-        if (m_args->stop_flag) break;
+    while (!m_args->stop_flag && !g_graceful_stop) {
+        for(int i = 0; i < m_args->interval_sec * 10 && !m_args->stop_flag && !g_graceful_stop; i++) {
+            usleep(100000); 
+        }
+        if (m_args->stop_flag || g_graceful_stop) break;
 
         long long current_success = 0, current_fail = 0, current_bytes = 0;
 
@@ -179,13 +194,41 @@ void *monitor_routine(void *arg) {
             double cumul_throughput = (current_bytes / 1024.0 / 1024.0) / total_elapsed_s;
             double success_rate = current_total > 0 ? ((double)current_success / current_total) * 100.0 : 0.0;
 
-            printf("[Monitor] RunTime: %8.1fs | Cumul TPS: %8.2f | Cumul BW: %8.2f MB/s | Success Rate: %7.3f%% | Total Reqs: %lld\n", 
-                   total_elapsed_s, cumul_tps, cumul_throughput, success_rate, current_total);
+            // [新增]: 计算进度百分比 (时间优先策略)
+            Config *cfg = m_args->t_args[0].config;
+            double progress_pct = -1.0; 
+            
+            if (cfg->run_seconds > 0) {
+                progress_pct = (total_elapsed_s / cfg->run_seconds) * 100.0;
+            } else {
+                long long expected_total_reqs = 0;
+                if (cfg->use_mix_mode) {
+                    expected_total_reqs = (long long)cfg->threads * cfg->mix_op_count * cfg->mix_loop_count;
+                } else if (cfg->requests_per_thread > 0) {
+                    expected_total_reqs = (long long)cfg->threads * cfg->requests_per_thread;
+                }
+                
+                if (expected_total_reqs > 0) {
+                    progress_pct = ((double)current_total / expected_total_reqs) * 100.0;
+                }
+            }
+
+            if (progress_pct > 100.0) progress_pct = 100.0;
+
+            // [新增]: 根据计算结果格式化控制台输出
+            if (progress_pct >= 0.0) {
+                printf("[Monitor] RunTime: %8.1fs | Process: %6.2f%% | Cumul TPS: %8.2f | Cumul BW: %8.2f MB/s | Success Rate: %7.3f%% | Total Reqs: %lld\n", 
+                       total_elapsed_s, progress_pct, cumul_tps, cumul_throughput, success_rate, current_total);
+            } else {
+                printf("[Monitor] RunTime: %8.1fs | Process:    N/A | Cumul TPS: %8.2f | Cumul BW: %8.2f MB/s | Success Rate: %7.3f%% | Total Reqs: %lld\n", 
+                       total_elapsed_s, cumul_tps, cumul_throughput, success_rate, current_total);
+            }
                    
-            // 异步写入 realtime.txt
             if (rt_fp) {
-                fprintf(rt_fp, "%.1f,%.2f,%.2f,%.3f,%lld\n", 
-                        total_elapsed_s, cumul_tps, cumul_throughput, success_rate, current_total);
+                // [新增]: 落盘数据增加进度列
+                fprintf(rt_fp, "%.1f,%.2f,%.2f,%.2f,%.3f,%lld\n", 
+                        total_elapsed_s, progress_pct >= 0 ? progress_pct : 0.0, 
+                        cumul_tps, cumul_throughput, success_rate, current_total);
                 fflush(rt_fp);
             }
         }
@@ -196,20 +239,27 @@ void *monitor_routine(void *arg) {
 }
 
 int main(int argc, char **argv) {
-    // --- 创建任务专属日志目录 ---
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGINT, handle_sigint);
+
     struct stat st = {0};
     if (stat("logs", &st) == -1) mkdir("logs", 0755);
     
     time_t now = time(NULL);
-    struct tm *t = localtime(&now);
+    struct tm t_res;
+    struct tm *t = localtime_r(&now, &t_res);
+    
     Config cfg;
     memset(&cfg, 0, sizeof(Config));
     
-    snprintf(cfg.task_log_dir, sizeof(cfg.task_log_dir), "logs/task_%04d%02d%02d_%02d%02d%02d",
-             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec);
+    if (t) {
+        snprintf(cfg.task_log_dir, sizeof(cfg.task_log_dir), "logs/task_%04d%02d%02d_%02d%02d%02d",
+                 t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec);
+    } else {
+        snprintf(cfg.task_log_dir, sizeof(cfg.task_log_dir), "logs/task_UNKNOWN");
+    }
              
     if (stat(cfg.task_log_dir, &st) == -1) mkdir(cfg.task_log_dir, 0755);
-    // ------------------------------------
 
     const char *config_file = "config.dat";
     int cli_test_case = 0;
@@ -249,7 +299,6 @@ int main(int argc, char **argv) {
     for (int u = 0; u < cfg.loaded_user_count; u++) {
         UserCredential *curr_user = &cfg.user_list[u];
         
-        // --- 智能桶名拼接逻辑 ---
         char target_bucket[256]; 
         memset(target_bucket, 0, sizeof(target_bucket));
 
@@ -273,7 +322,6 @@ int main(int argc, char **argv) {
                 strcpy(target_bucket, "default-bench-bucket");
             }
         }
-        // ------------------------------------
         
         for (int t = 0; t < cfg.threads_per_user; t++) {
             if (global_thread_idx >= cfg.threads) break;
@@ -328,6 +376,10 @@ int main(int argc, char **argv) {
     double tps = (actual_time_s > 0) ? (total_reqs / actual_time_s) : 0.0;
     double throughput_mb = (total_bytes) / 1024.0 / 1024.0 / actual_time_s;
 
+    if (g_graceful_stop) {
+        LOG_WARN("Benchmark interrupted by user (Graceful Stop).");
+    }
+
     printf("\n--- Test Result ---\n");
     printf("Actual Duration: %.2f s\n", actual_time_s);
     printf("Total Requests:  %lld\n", total_reqs);
@@ -351,4 +403,5 @@ int main(int argc, char **argv) {
     free(tids); free(t_args);
     obs_deinitialize();
     return 0;
-} 
+}
+
