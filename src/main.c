@@ -10,13 +10,31 @@
 // 全局优雅退出标志
 volatile sig_atomic_t g_graceful_stop = 0;
 
-// [优化]: 信号处理函数，仅使用异步信号安全函数，杜绝死锁
+// [优化]: 升级版的信号处理函数，支持二次强制退出 (Escalated Shutdown)
 void handle_sigint(int sig) {
-    g_graceful_stop = 1;
-    const char *msg = "\n[WARN] Received SIGINT, initiating graceful shutdown... Please wait for running requests to finish.\n";
-    // 使用系统调用 write 代替 printf/LOG，确保线程安全
-    if (write(STDOUT_FILENO, msg, strlen(msg)) < 0) {
-        // 忽略错误
+    // 静态变量，用于记录接收到 SIGINT 信号的次数
+    static volatile sig_atomic_t sigint_count = 0;
+    sigint_count++;
+
+    if (sigint_count == 1) {
+        // 第一次触发：设置标志位，尝试优雅退出
+        g_graceful_stop = 1;
+        const char msg[] = "\n[WARN] Received SIGINT (1/2). Initiating graceful shutdown... Please wait.\n"
+                           "       Press CTRL+C again to FORCE QUIT if it hangs.\n";
+        // 使用 write 是因为它是异步信号安全 (async-signal-safe) 的函数
+        if (write(STDOUT_FILENO, msg, sizeof(msg) - 1) < 0) {
+            // 忽略错误
+        }
+    } else {
+        // 第二次触发：程序可能已陷入死锁，执行暴力退出
+        const char msg[] = "\n[FATAL] Received SIGINT (2/2). Force quitting immediately!\n";
+        if (write(STDOUT_FILENO, msg, sizeof(msg) - 1) < 0) {
+            // 忽略错误
+        }
+        
+        // 【核心】：必须使用 _exit(1) 而非 exit(1)。
+        // _exit 会直接陷入内核终止进程，不清理用户态缓冲区，避免在信号上下文中发生死锁。
+        _exit(1); 
     }
 }
 
@@ -31,7 +49,7 @@ const char* log_level_to_string(LogLevel level) {
     }
 }
 
-// [恢复]: 完整的结果汇总与报告保存函数
+// 完整的结果汇总与报告保存函数
 void save_benchmark_report(Config *cfg, long long total, 
                            long long success, long long fail, 
                            long long f403, long long f404, long long f409, long long f4other,
@@ -117,7 +135,7 @@ typedef struct {
     char task_log_dir[256]; 
 } MonitorArgs;
 
-// [恢复+优化]: 监控线程，包含精准的 Process(%) 计算
+// 监控线程，包含精准的 Process(%) 计算
 void *monitor_routine(void *arg) {
     MonitorArgs *m_args = (MonitorArgs *)arg;
     
@@ -159,7 +177,6 @@ void *monitor_routine(void *arg) {
             double cumul_throughput = (current_bytes / 1024.0 / 1024.0) / total_elapsed_s;
             double success_rate = current_total > 0 ? ((double)current_success / current_total) * 100.0 : 0.0;
 
-            // [逻辑优化]: 进度百分比计算（时间优先策略）
             Config *cfg = m_args->t_args[0].config;
             double progress_pct = -1.0; 
             
@@ -204,7 +221,7 @@ void *monitor_routine(void *arg) {
 }
 
 int main(int argc, char **argv) {
-    // [优化]: 忽略 SIGPIPE 信号，防止高并发下 TCP 连接异常导致进程崩溃
+    // 忽略 SIGPIPE 信号，防止高并发下 TCP 连接异常导致进程崩溃
     signal(SIGPIPE, SIG_IGN);
     // 注册优雅退出信号
     signal(SIGINT, handle_sigint);
@@ -227,7 +244,7 @@ int main(int argc, char **argv) {
              
     if (stat(cfg.task_log_dir, &st) == -1) mkdir(cfg.task_log_dir, 0755);
 
-    // [恢复]: 灵活的命令行参数解析
+    // 灵活的命令行参数解析
     const char *config_file = "config.dat";
     int cli_test_case = 0;
     if (argc > 1) {
@@ -264,7 +281,7 @@ int main(int argc, char **argv) {
     struct timeval main_start_tv, main_end_tv;
     gettimeofday(&main_start_tv, NULL);
 
-    // [恢复]: 多用户与多线程映射分配逻辑
+    // 多用户与多线程映射分配逻辑
     int global_thread_idx = 0;
     for (int u = 0; u < cfg.loaded_user_count; u++) {
         UserCredential *curr_user = &cfg.user_list[u];
@@ -326,7 +343,7 @@ int main(int argc, char **argv) {
     gettimeofday(&main_end_tv, NULL);
     double actual_time_s = (main_end_tv.tv_sec - main_start_tv.tv_sec) + (main_end_tv.tv_usec - main_start_tv.tv_usec) / 1000000.0;
 
-    // [恢复]: 核心结果汇总逻辑
+    // 核心结果汇总逻辑
     long long total_success = 0, t_403=0, t_404=0, t_409=0, t_4xx=0, t_5xx=0, t_other=0, t_val=0, total_bytes=0;
 
     for (int i = 0; i < cfg.threads; i++) {
@@ -350,7 +367,7 @@ int main(int argc, char **argv) {
         printf("\n[WARN] Benchmark interrupted by user (Graceful Stop).\n");
     }
 
-    // [修正]: 打印汇总后的 t_ 系列变量
+    // 打印汇总后的 t_ 系列变量
     printf("\n--- Test Result ---\n");
     printf("Actual Duration: %.2f s\n", actual_time_s);
     printf("Total Requests:  %lld\n", total_reqs);
@@ -367,12 +384,12 @@ int main(int argc, char **argv) {
     printf("TPS:             %.2f\n", tps);
     printf("Throughput:      %.2f MB/s\n", throughput_mb);
 
-    // [修正]: 保存详细报告
+    // 保存详细报告
     save_benchmark_report(&cfg, total_reqs, total_success, total_fail, 
                           t_403, t_404, t_409, t_4xx, t_5xx, t_other, t_val,
                           tps, throughput_mb);
 
-    // [资源清理]: 释放堆内存，解决内存泄漏
+    // [资源清理]: 释放堆内存，解决 ASAN 内存泄漏
     free(tids); 
     free(t_args);
 
