@@ -15,6 +15,8 @@ typedef struct {
 
     long long pattern_start_offset; 
     int skip_validation;            
+    
+    char request_id[64];
 } transfer_context;
 
 obs_status response_properties_callback(const obs_response_properties *properties, void *callback_data) {
@@ -26,6 +28,10 @@ obs_status response_properties_callback(const obs_response_properties *propertie
 
         if (properties->etag) {
             snprintf(ctx->returned_etag, sizeof(ctx->returned_etag), "%s", properties->etag);
+        }
+        
+        if (properties->request_id) {
+            snprintf(ctx->request_id, sizeof(ctx->request_id), "%s", properties->request_id);
         }
     }
     return OBS_STATUS_OK;
@@ -42,7 +48,6 @@ void response_complete_callback(obs_status status, const obs_error_details *erro
 }
 
 int put_buffer_callback_optimized(int buffer_size, char *buffer, void *callback_data) {
-    // [修复]: 监控到退出信号，立刻返回 -1 强制掐断当前 HTTP 请求
     if (g_graceful_stop) return -1; 
     
     transfer_context *ctx = (transfer_context *)callback_data;
@@ -65,7 +70,6 @@ int put_buffer_callback_optimized(int buffer_size, char *buffer, void *callback_
 }
 
 obs_status get_buffer_callback_optimized(int buffer_size, const char *buffer, void *callback_data) {
-    // [修复]: 监控到退出信号，立刻返回内部错误码强制掐断数据接收
     if (g_graceful_stop) return OBS_STATUS_InternalError; 
 
     transfer_context *ctx = (transfer_context *)callback_data;
@@ -137,8 +141,9 @@ static void setup_options(obs_options *option, WorkerArgs *args) {
     option->bucket_options.secret_access_key = args->effective_sk;
     option->bucket_options.protocol = (strcasecmp(args->config->protocol, "http") == 0) ? OBS_PROTOCOL_HTTP : OBS_PROTOCOL_HTTPS;
     
-    option->request_options.connect_time = args->config->connect_timeout_ms;
-    option->request_options.max_connected_time = args->config->request_timeout_ms;
+    // [修改]: 直接注入秒级别的配置到 libcurl 选项中
+    option->request_options.connect_time = args->config->connect_timeout_sec;
+    option->request_options.max_connected_time = args->config->request_timeout_sec;
 
     option->request_options.keep_alive = (args->config->keep_alive != 0);
     option->request_options.gm_mode_switch = args->config->gm_mode_switch ? 1 : 0;
@@ -154,10 +159,10 @@ static void setup_options(obs_options *option, WorkerArgs *args) {
     }
 }
 
-obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size) {
+obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size, char *out_req_id) {
     obs_options option;
     setup_options(&option, args);
-    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0};
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0, {0}};
 
     obs_put_properties put_props;
     init_put_properties(&put_props);
@@ -168,6 +173,10 @@ obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size)
     handler.put_object_data_callback = &put_buffer_callback_optimized;
 
     put_object(&option, key, object_size, &put_props, NULL, &handler, &ctx);
+    
+    if (out_req_id && strlen(ctx.request_id) > 0) {
+        strcpy(out_req_id, ctx.request_id);
+    }
     return ctx.ret_status;
 }
 
@@ -209,7 +218,7 @@ static void apply_range_conditions(const char *range_str, obs_get_conditions *co
     }
 }
 
-obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str) {
+obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str, char *out_req_id) {
     obs_options option;
     setup_options(&option, args);
     obs_object_info obj_info = {0};
@@ -217,7 +226,7 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str) {
     obs_get_conditions conditions;
     init_get_properties(&conditions);
 
-    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0};
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0, {0}};
     
     if (range_str) {
         char *temp_range = strdup(range_str);
@@ -250,44 +259,55 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str) {
         args->stats.total_success_bytes += ctx.total_processed;
     }
 
+    if (out_req_id && strlen(ctx.request_id) > 0) {
+        strcpy(out_req_id, ctx.request_id);
+    }
     return ctx.ret_status;
 }
 
-obs_status run_delete_benchmark(WorkerArgs *args, char *key) {
+obs_status run_delete_benchmark(WorkerArgs *args, char *key, char *out_req_id) {
     obs_options option;
     setup_options(&option, args);
-    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0};
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0, {0}};
     obs_object_info obj_info = {0};
     obj_info.key = key;
     obs_response_handler handler = {0};
     handler.properties_callback = &response_properties_callback;
     handler.complete_callback = &response_complete_callback;
     delete_object(&option, &obj_info, &handler, &ctx);
+
+    if (out_req_id && strlen(ctx.request_id) > 0) {
+        strcpy(out_req_id, ctx.request_id);
+    }
     return ctx.ret_status;
 }
 
-obs_status run_list_benchmark(WorkerArgs *args) {
+obs_status run_list_benchmark(WorkerArgs *args, char *out_req_id) {
     obs_options option;
     setup_options(&option, args);
-    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0};
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0, {0}};
     obs_list_objects_handler handler = {0};
     handler.response_handler.properties_callback = &response_properties_callback;
     handler.response_handler.complete_callback = &response_complete_callback;
     handler.list_Objects_callback = &list_objects_callback;
     list_bucket_objects(&option, args->config->key_prefix, NULL, NULL, 100, &handler, &ctx);
+    
+    if (out_req_id && strlen(ctx.request_id) > 0) {
+        strcpy(out_req_id, ctx.request_id);
+    }
     return ctx.ret_status;
 }
 
-obs_status run_multipart_benchmark(WorkerArgs *args, char *key) {
+obs_status run_multipart_benchmark(WorkerArgs *args, char *key, char *out_req_id) {
     obs_options option;
     setup_options(&option, args);
     return OBS_STATUS_OK; 
 }
 
-obs_status run_upload_file_benchmark(WorkerArgs *args, char *key) {
+obs_status run_upload_file_benchmark(WorkerArgs *args, char *key, char *out_req_id) {
     obs_options option;
     setup_options(&option, args);
-    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0};
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0, {0}};
     obs_put_properties put_props;
     init_put_properties(&put_props);
     int pause_flag = 0;
@@ -310,6 +330,10 @@ obs_status run_upload_file_benchmark(WorkerArgs *args, char *key) {
     handler.upload_file_callback = &upload_file_complete_callback;
 
     upload_file(&option, key, NULL, &upload_conf, server_cb, &handler, &ctx);
+    
+    if (out_req_id && strlen(ctx.request_id) > 0) {
+        strcpy(out_req_id, ctx.request_id);
+    }
     return ctx.ret_status;
 }
 

@@ -7,13 +7,16 @@
 #include <ctype.h>
 #include <signal.h>
 
+// 全局优雅退出标志
 volatile sig_atomic_t g_graceful_stop = 0;
 
+// [优化]: 信号处理函数，仅使用异步信号安全函数，杜绝死锁
 void handle_sigint(int sig) {
     g_graceful_stop = 1;
     const char *msg = "\n[WARN] Received SIGINT, initiating graceful shutdown... Please wait for running requests to finish.\n";
+    // 使用系统调用 write 代替 printf/LOG，确保线程安全
     if (write(STDOUT_FILENO, msg, strlen(msg)) < 0) {
-        // 忽略 write 失败
+        // 忽略错误
     }
 }
 
@@ -28,6 +31,7 @@ const char* log_level_to_string(LogLevel level) {
     }
 }
 
+// [恢复]: 完整的结果汇总与报告保存函数
 void save_benchmark_report(Config *cfg, long long total, 
                            long long success, long long fail, 
                            long long f403, long long f404, long long f409, long long f4other,
@@ -41,7 +45,7 @@ void save_benchmark_report(Config *cfg, long long total,
 
     time_t now = time(NULL);
     struct tm t_res;
-    struct tm *t = localtime_r(&now, &t_res);
+    struct tm *t = localtime_r(&now, &t_res); // 线程安全时间获取
 
     fprintf(fp, "===========================================\n");
     fprintf(fp, "      OBS C SDK Benchmark Execution Report \n");
@@ -54,27 +58,26 @@ void save_benchmark_report(Config *cfg, long long total,
     fprintf(fp, "---------------- Configuration ----------------\n");
     fprintf(fp, "[Environment]\n");
     fprintf(fp, "  Endpoint:          %s\n", cfg->endpoint);
-    if(cfg->threads > 0) fprintf(fp, "  Bucket(Prefix):    %s\n", cfg->bucket_name_prefix);
+    fprintf(fp, "  Bucket(Fixed):     %s\n", cfg->bucket_name_fixed[0] ? cfg->bucket_name_fixed : "N/A");
+    fprintf(fp, "  Bucket(Prefix):    %s\n", cfg->bucket_name_prefix[0] ? cfg->bucket_name_prefix : "N/A");
     
     fprintf(fp, "[Network]\n");
     fprintf(fp, "  Protocol:          %s\n", cfg->protocol);
     fprintf(fp, "  KeepAlive:         %s\n", cfg->keep_alive ? "true" : "false");
-    fprintf(fp, "  ConnectTimeout:    %d ms\n", cfg->connect_timeout_ms);
-    fprintf(fp, "  RequestTimeout:    %d ms\n", cfg->request_timeout_ms);
+    fprintf(fp, "  ConnectTimeout:    %d sec\n", cfg->connect_timeout_sec);
+    fprintf(fp, "  RequestTimeout:    %d sec\n", cfg->request_timeout_sec);
     
-    fprintf(fp, "[TestPlan - General]\n");
-    fprintf(fp, "  Threads:           %d\n", cfg->threads);
+    fprintf(fp, "[TestPlan]\n");
+    fprintf(fp, "  Total Threads:     %d (%d Users x %d Threads/User)\n", 
+            cfg->threads, cfg->loaded_user_count, cfg->threads_per_user);
     fprintf(fp, "  RunSeconds:        %d %s\n", cfg->run_seconds, cfg->run_seconds > 0 ? "(Time Limited)" : "(No Limit)");
-    fprintf(fp, "  LogLevel:          %s\n", log_level_to_string(cfg->log_level));
-    
-    fprintf(fp, "[TestPlan - Mode]\n");
     if (cfg->use_mix_mode) {
-        fprintf(fp, "  Mode:              Mixed Operation (900)\n");
+        fprintf(fp, "  TestMode:          Mixed Operations (900)\n");
+        fprintf(fp, "  MixLoopCount:      %lld\n", cfg->mix_loop_count);
     } else {
-        fprintf(fp, "  Mode:              Standard Case\n");
-        fprintf(fp, "  TestCase:          %d\n", cfg->test_case);
-        fprintf(fp, "  RequestsPerThread: %d\n", cfg->requests_per_thread);
+        fprintf(fp, "  TestMode:          Standard TestCase (%d)\n", cfg->test_case);
     }
+    fprintf(fp, "  ReqsPerOp/Thread:  %d\n", cfg->requests_per_thread);
 
     fprintf(fp, "---------------- Statistics -------------------\n");
     fprintf(fp, "Total Requests:      %lld\n", total);
@@ -86,57 +89,18 @@ void save_benchmark_report(Config *cfg, long long total,
     fprintf(fp, "  |- 4xx (Other):      %lld\n", f4other);
     fprintf(fp, "  |- 5xx (Server):     %lld\n", f5xx);
     fprintf(fp, "  |- Other (Net/SDK):  %lld\n", fother);
-    fprintf(fp, "  |- Other (DataConsistencyError):  %lld\n", fvalidate);
+    fprintf(fp, "  |- Internal Validation Fail: %lld\n", fvalidate);
     
     fprintf(fp, "\nPerformance:\n");
-    fprintf(fp, "  TPS:                 %.2f\n", tps);
-    fprintf(fp, "  Throughput:          %.2f MB/s\n", throughput);
+    fprintf(fp, "  Final TPS:           %.2f\n", tps);
+    fprintf(fp, "  Final Throughput:    %.2f MB/s\n", throughput);
     fprintf(fp, "===========================================\n");
 
     fclose(fp);
     LOG_INFO("Execution report saved to: %s", filepath);
 }
 
-int file_exists(const char *filepath) {
-    struct stat buffer;
-    return (stat(filepath, &buffer) == 0);
-}
-
-int create_deterministic_file(const char *filepath, long long size) {
-    if (file_exists(filepath)) {
-        struct stat st;
-        stat(filepath, &st);
-        if (st.st_size == size) {
-            LOG_INFO("File exists and matches size, reusing: %s", filepath);
-            return 0;
-        }
-    }
-
-    FILE *fp = fopen(filepath, "wb");
-    if (!fp) {
-        LOG_ERROR("Failed to create file: %s", filepath);
-        return -1;
-    }
-
-    long long buf_size = 1024 * 1024;
-    char *buf = malloc(buf_size);
-    if (!buf) { fclose(fp); return -1; }
-    
-    fill_pattern_buffer(buf, buf_size, 0);
-
-    long long written = 0;
-    while (written < size) {
-        long long to_write = (size - written > buf_size) ? buf_size : (size - written);
-        fwrite(buf, 1, to_write, fp);
-        written += to_write;
-    }
-    
-    free(buf);
-    fclose(fp);
-    LOG_INFO("Created deterministic file: %s (%lld bytes)", filepath, size);
-    return 0;
-}
-
+// 字符串转小写辅助
 void str_tolower(char *dst, const char *src) {
     while(*src) {
         *dst = tolower((unsigned char)*src);
@@ -153,6 +117,7 @@ typedef struct {
     char task_log_dir[256]; 
 } MonitorArgs;
 
+// [恢复+优化]: 监控线程，包含精准的 Process(%) 计算
 void *monitor_routine(void *arg) {
     MonitorArgs *m_args = (MonitorArgs *)arg;
     
@@ -160,7 +125,6 @@ void *monitor_routine(void *arg) {
     snprintf(rt_filepath, sizeof(rt_filepath), "%s/realtime.txt", m_args->task_log_dir);
     FILE *rt_fp = fopen(rt_filepath, "w");
     if (rt_fp) {
-        // [新增]: 表头增加 Process(%)
         fprintf(rt_fp, "RunTime(s),Process(%%),Cumul_TPS,Cumul_BW(MB/s),Success_Rate(%%),Total_Reqs\n");
         fflush(rt_fp);
     }
@@ -169,6 +133,7 @@ void *monitor_routine(void *arg) {
     gettimeofday(&start_tv, NULL);
 
     while (!m_args->stop_flag && !g_graceful_stop) {
+        // 分段延时，保证能快速响应 stop_flag
         for(int i = 0; i < m_args->interval_sec * 10 && !m_args->stop_flag && !g_graceful_stop; i++) {
             usleep(100000); 
         }
@@ -194,18 +159,20 @@ void *monitor_routine(void *arg) {
             double cumul_throughput = (current_bytes / 1024.0 / 1024.0) / total_elapsed_s;
             double success_rate = current_total > 0 ? ((double)current_success / current_total) * 100.0 : 0.0;
 
-            // [新增]: 计算进度百分比 (时间优先策略)
+            // [逻辑优化]: 进度百分比计算（时间优先策略）
             Config *cfg = m_args->t_args[0].config;
             double progress_pct = -1.0; 
             
             if (cfg->run_seconds > 0) {
                 progress_pct = (total_elapsed_s / cfg->run_seconds) * 100.0;
             } else {
+                long long reqs_per_op = cfg->requests_per_thread > 0 ? cfg->requests_per_thread : 1;
                 long long expected_total_reqs = 0;
+                
                 if (cfg->use_mix_mode) {
-                    expected_total_reqs = (long long)cfg->threads * cfg->mix_op_count * cfg->mix_loop_count;
+                    expected_total_reqs = (long long)cfg->threads * cfg->mix_op_count * cfg->mix_loop_count * reqs_per_op;
                 } else if (cfg->requests_per_thread > 0) {
-                    expected_total_reqs = (long long)cfg->threads * cfg->requests_per_thread;
+                    expected_total_reqs = (long long)cfg->threads * reqs_per_op;
                 }
                 
                 if (expected_total_reqs > 0) {
@@ -215,7 +182,6 @@ void *monitor_routine(void *arg) {
 
             if (progress_pct > 100.0) progress_pct = 100.0;
 
-            // [新增]: 根据计算结果格式化控制台输出
             if (progress_pct >= 0.0) {
                 printf("[Monitor] RunTime: %8.1fs | Process: %6.2f%% | Cumul TPS: %8.2f | Cumul BW: %8.2f MB/s | Success Rate: %7.3f%% | Total Reqs: %lld\n", 
                        total_elapsed_s, progress_pct, cumul_tps, cumul_throughput, success_rate, current_total);
@@ -225,7 +191,6 @@ void *monitor_routine(void *arg) {
             }
                    
             if (rt_fp) {
-                // [新增]: 落盘数据增加进度列
                 fprintf(rt_fp, "%.1f,%.2f,%.2f,%.2f,%.3f,%lld\n", 
                         total_elapsed_s, progress_pct >= 0 ? progress_pct : 0.0, 
                         cumul_tps, cumul_throughput, success_rate, current_total);
@@ -239,7 +204,9 @@ void *monitor_routine(void *arg) {
 }
 
 int main(int argc, char **argv) {
+    // [优化]: 忽略 SIGPIPE 信号，防止高并发下 TCP 连接异常导致进程崩溃
     signal(SIGPIPE, SIG_IGN);
+    // 注册优雅退出信号
     signal(SIGINT, handle_sigint);
 
     struct stat st = {0};
@@ -248,7 +215,6 @@ int main(int argc, char **argv) {
     time_t now = time(NULL);
     struct tm t_res;
     struct tm *t = localtime_r(&now, &t_res);
-    
     Config cfg;
     memset(&cfg, 0, sizeof(Config));
     
@@ -261,6 +227,7 @@ int main(int argc, char **argv) {
              
     if (stat(cfg.task_log_dir, &st) == -1) mkdir(cfg.task_log_dir, 0755);
 
+    // [恢复]: 灵活的命令行参数解析
     const char *config_file = "config.dat";
     int cli_test_case = 0;
     if (argc > 1) {
@@ -270,6 +237,7 @@ int main(int argc, char **argv) {
 
     if (load_config(config_file, &cfg) != 0) return 1;
 
+    // 允许通过命令行覆盖 TestCase
     if (cli_test_case > 0) {
         cfg.test_case = cli_test_case;
         if (cli_test_case == TEST_CASE_MIX && cfg.mix_op_count > 0) cfg.use_mix_mode = 1;
@@ -283,18 +251,20 @@ int main(int argc, char **argv) {
     obs_status status = obs_initialize(OBS_INIT_ALL);
     if (status != OBS_STATUS_OK) return -1;
 
+    // 计算停止时间戳
     double current_ms = 0; 
-    struct timespec ts_start;
-    clock_gettime(CLOCK_MONOTONIC_COARSE, &ts_start);
-    current_ms = ts_start.tv_sec * 1000.0 + ts_start.tv_nsec / 1000000.0;
+    struct timespec ts_now;
+    clock_gettime(CLOCK_MONOTONIC_COARSE, &ts_now);
+    current_ms = ts_now.tv_sec * 1000.0 + ts_now.tv_nsec / 1000000.0;
     double stop_ms = (cfg.run_seconds > 0) ? (current_ms + cfg.run_seconds * 1000.0) : 1e15; 
 
     pthread_t *tids = (pthread_t *)malloc(cfg.threads * sizeof(pthread_t));
     WorkerArgs *t_args = (WorkerArgs *)calloc(cfg.threads, sizeof(WorkerArgs));
 
-    struct timeval start_tv, end_tv;
-    gettimeofday(&start_tv, NULL);
+    struct timeval main_start_tv, main_end_tv;
+    gettimeofday(&main_start_tv, NULL);
 
+    // [恢复]: 多用户与多线程映射分配逻辑
     int global_thread_idx = 0;
     for (int u = 0; u < cfg.loaded_user_count; u++) {
         UserCredential *curr_user = &cfg.user_list[u];
@@ -302,20 +272,16 @@ int main(int argc, char **argv) {
         char target_bucket[256]; 
         memset(target_bucket, 0, sizeof(target_bucket));
 
+        // 确定桶名策略
         if (strlen(cfg.bucket_name_fixed) > 0) {
             strcpy(target_bucket, cfg.bucket_name_fixed);
         } else {
             char ak_lower[128] = {0};
-            if (strlen(curr_user->ak) > 0) {
-                str_tolower(ak_lower, curr_user->ak);
-            }
+            if (strlen(curr_user->ak) > 0) str_tolower(ak_lower, curr_user->ak);
 
             if (strlen(cfg.bucket_name_prefix) > 0) {
-                if (strlen(ak_lower) > 0) {
-                    snprintf(target_bucket, sizeof(target_bucket), "%s.%s", ak_lower, cfg.bucket_name_prefix);
-                } else {
-                    snprintf(target_bucket, sizeof(target_bucket), "%s", cfg.bucket_name_prefix);
-                }
+                if (strlen(ak_lower) > 0) snprintf(target_bucket, sizeof(target_bucket), "%s.%s", ak_lower, cfg.bucket_name_prefix);
+                else snprintf(target_bucket, sizeof(target_bucket), "%s", cfg.bucket_name_prefix);
             } else if (strlen(ak_lower) > 0) {
                 snprintf(target_bucket, sizeof(target_bucket), "%s", ak_lower);
             } else {
@@ -323,7 +289,7 @@ int main(int argc, char **argv) {
             }
         }
         
-        for (int t = 0; t < cfg.threads_per_user; t++) {
+        for (int t_idx = 0; t_idx < cfg.threads_per_user; t_idx++) {
             if (global_thread_idx >= cfg.threads) break;
             WorkerArgs *args = &t_args[global_thread_idx];
             args->thread_id = global_thread_idx;
@@ -339,6 +305,7 @@ int main(int argc, char **argv) {
         }
     }
     
+    // 启动监控线程
     MonitorArgs m_args;
     m_args.t_args = t_args;
     m_args.thread_count = cfg.threads;
@@ -349,14 +316,17 @@ int main(int argc, char **argv) {
     pthread_t monitor_tid;
     pthread_create(&monitor_tid, NULL, monitor_routine, &m_args);
 
+    // 等待所有工作线程结束
     for (int i = 0; i < cfg.threads; i++) pthread_join(tids[i], NULL);
 
+    // 停止监控
     m_args.stop_flag = 1;
     pthread_join(monitor_tid, NULL);
 
-    gettimeofday(&end_tv, NULL);
-    double actual_time_s = (end_tv.tv_sec - start_tv.tv_sec) + (end_tv.tv_usec - start_tv.tv_usec) / 1000000.0;
+    gettimeofday(&main_end_tv, NULL);
+    double actual_time_s = (main_end_tv.tv_sec - main_start_tv.tv_sec) + (main_end_tv.tv_usec - main_start_tv.tv_usec) / 1000000.0;
 
+    // [恢复]: 核心结果汇总逻辑
     long long total_success = 0, t_403=0, t_404=0, t_409=0, t_4xx=0, t_5xx=0, t_other=0, t_val=0, total_bytes=0;
 
     for (int i = 0; i < cfg.threads; i++) {
@@ -377,9 +347,10 @@ int main(int argc, char **argv) {
     double throughput_mb = (total_bytes) / 1024.0 / 1024.0 / actual_time_s;
 
     if (g_graceful_stop) {
-        LOG_WARN("Benchmark interrupted by user (Graceful Stop).");
+        printf("\n[WARN] Benchmark interrupted by user (Graceful Stop).\n");
     }
 
+    // [修正]: 打印汇总后的 t_ 系列变量
     printf("\n--- Test Result ---\n");
     printf("Actual Duration: %.2f s\n", actual_time_s);
     printf("Total Requests:  %lld\n", total_reqs);
@@ -391,16 +362,32 @@ int main(int argc, char **argv) {
     printf("  |- 4xx (Other):      %lld\n", t_4xx);
     printf("  |- 5xx (Server):     %lld\n", t_5xx);
     printf("  |- Other (Net/SDK):  %lld\n", t_other);
-    printf("  |- Other (DataConsistencyError):  %lld\n", t_val);
+    printf("  |- Internal Validation Fail: %lld\n", t_val);
     
     printf("TPS:             %.2f\n", tps);
     printf("Throughput:      %.2f MB/s\n", throughput_mb);
 
+    // [修正]: 保存详细报告
     save_benchmark_report(&cfg, total_reqs, total_success, total_fail, 
                           t_403, t_404, t_409, t_4xx, t_5xx, t_other, t_val,
                           tps, throughput_mb);
 
-    free(tids); free(t_args);
+    // [资源清理]: 释放堆内存，解决内存泄漏
+    free(tids); 
+    free(t_args);
+
+    if (cfg.user_list) {
+        free(cfg.user_list);
+        cfg.user_list = NULL;
+    }
+
+    for (int i = 0; i < cfg.range_count; i++) {
+        if (cfg.range_options[i]) {
+            free(cfg.range_options[i]);
+            cfg.range_options[i] = NULL;
+        }
+    }
+
     obs_deinitialize();
     return 0;
 }

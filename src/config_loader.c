@@ -105,9 +105,9 @@ int load_config(const char *filename, Config *cfg) {
         return -1;
     }
     
-    // 默认超时时间设定
-    cfg->connect_timeout_ms = 10000;  // 默认10秒连接超时
-    cfg->request_timeout_ms = 30000;  // 默认30秒请求超时
+    // [修改]: 默认超时时间设定 (改为秒)
+    cfg->connect_timeout_sec = 10;  // 默认10秒连接超时
+    cfg->request_timeout_sec = 30;  // 默认30秒请求超时
 
     strcpy(cfg->protocol, "https");
     cfg->keep_alive = 1;
@@ -158,9 +158,9 @@ int load_config(const char *filename, Config *cfg) {
         else if (strcmp(key, "Protocol") == 0) strcpy(cfg->protocol, val);
         else if (strcmp(key, "KeepAlive") == 0) cfg->keep_alive = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         
-        // --- 解析超时配置 ---
-        else if (strcmp(key, "ConnectTimeoutMs") == 0) cfg->connect_timeout_ms = atoi(val);
-        else if (strcmp(key, "RequestTimeoutMs") == 0) cfg->request_timeout_ms = atoi(val);
+        // [修改]: 解析超时配置 (改为秒)
+        else if (strcmp(key, "ConnectTimeoutSec") == 0) cfg->connect_timeout_sec = atoi(val);
+        else if (strcmp(key, "RequestTimeoutSec") == 0) cfg->request_timeout_sec = atoi(val);
 
         else if (strcmp(key, "LogLevel") == 0) cfg->log_level = log_level_from_string(val);
         else if (strcmp(key, "ObjNamePatternHash") == 0) cfg->obj_name_pattern_hash = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);

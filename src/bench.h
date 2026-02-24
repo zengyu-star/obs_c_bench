@@ -22,6 +22,9 @@
 // 全局优雅退出标志
 extern volatile sig_atomic_t g_graceful_stop;
 
+// [修改]: 定义统一的最大 Key 长度
+#define MAX_KEY_LEN             1025
+
 // TestCase 编号定义
 #define TEST_CASE_PUT           201
 #define TEST_CASE_GET           202
@@ -46,10 +49,12 @@ typedef struct {
 typedef struct {
     double timestamp_s;
     int op_type;
-    char key[256];
+    char key[MAX_KEY_LEN]; // [修改]: 扩展为支持 1024 字节
     double latency_ms;
-    int status_code;
+    int status_code;    // 原始 SDK 状态码
+    int http_code;      // 推断出的实际 HTTP 状态码
     long long bytes;
+    char request_id[64];// Request ID
 } ReqRecord;
 
 typedef struct {
@@ -57,9 +62,9 @@ typedef struct {
     char protocol[16];
     int keep_alive;
 
-    // --- 超时防卡死配置 ---
-    int connect_timeout_ms;
-    int request_timeout_ms;
+    // --- 超时防卡死配置 (秒) ---
+    int connect_timeout_sec;
+    int request_timeout_sec;
 
     // --- 并发与用户配置 ---
     int threads;
@@ -165,12 +170,12 @@ void save_benchmark_report(Config *cfg, long long total,
                            long long f5xx, long long fother, long long fvalidate,
                            double tps, double throughput);
 
-obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size);
-obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str);
-obs_status run_delete_benchmark(WorkerArgs *args, char *key);
-obs_status run_list_benchmark(WorkerArgs *args);
-obs_status run_multipart_benchmark(WorkerArgs *args, char *key);
-obs_status run_upload_file_benchmark(WorkerArgs *args, char *key);
+obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size, char *out_req_id);
+obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str, char *out_req_id);
+obs_status run_delete_benchmark(WorkerArgs *args, char *key, char *out_req_id);
+obs_status run_list_benchmark(WorkerArgs *args, char *out_req_id);
+obs_status run_multipart_benchmark(WorkerArgs *args, char *key, char *out_req_id);
+obs_status run_upload_file_benchmark(WorkerArgs *args, char *key, char *out_req_id);
 
 #endif
 

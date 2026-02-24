@@ -43,6 +43,8 @@ void put_object(const obs_options *options, char *key, uint64_t content_length,
         obs_response_properties props;
         memset(&props, 0, sizeof(props));
         props.etag = "mock-etag-12345";
+        // [新增] 补充模拟的 Request ID
+        props.request_id = "MockReqId-PutObject-9999"; 
         handler->response_handler.properties_callback(&props, callback_data);
     }
     if (handler->response_handler.complete_callback) {
@@ -57,7 +59,7 @@ void get_object(const obs_options *options, obs_object_info *object_info,
 {
     __sync_fetch_and_add(&mock_get_calls, 1);
     
-    // [修改] Range 下载逻辑模拟
+    // Range 下载逻辑模拟
     uint64_t start = 0;
     uint64_t length_to_send = 8192; // 默认大小
 
@@ -84,6 +86,8 @@ void get_object(const obs_options *options, obs_object_info *object_info,
         memset(&props, 0, sizeof(props));
         props.etag = "mock-etag-download";
         props.content_length = length_to_send; 
+        // [新增] 补充模拟的 Request ID
+        props.request_id = "MockReqId-GetObject-8888"; 
         handler->response_handler.properties_callback(&props, callback_data);
     }
 
@@ -163,6 +167,8 @@ void upload_part(const obs_options *options, char *key, obs_upload_part_info *pa
         char etag_buf[64];
         snprintf(etag_buf, sizeof(etag_buf), "mock-etag-%d", part_info ? part_info->part_number : 0);
         props.etag = etag_buf;
+        // [新增] 补充模拟的 Request ID
+        props.request_id = "MockReqId-UploadPart-7777"; 
         handler->response_handler.properties_callback(&props, callback_data);
     }
     if (handler->response_handler.complete_callback) {
