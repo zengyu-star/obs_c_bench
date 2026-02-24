@@ -154,7 +154,7 @@ void str_tolower(char *dst, const char *src) {
     *dst = '\0';
 }
 
-// [新增] 监控线程参数结构体
+// 监控线程参数结构体
 typedef struct {
     WorkerArgs *t_args;
     int thread_count;
@@ -162,15 +162,12 @@ typedef struct {
     volatile int stop_flag;
 } MonitorArgs;
 
-// [新增] 无锁监控线程：每隔 N 秒读取一次所有 Worker 的本地统计数据并打印瞬时指标
+// 无锁监控线程：每隔 N 秒读取一次所有 Worker 的本地统计数据，并打印【累计】指标
 void *monitor_routine(void *arg) {
     MonitorArgs *m_args = (MonitorArgs *)arg;
     
-    long long last_total_reqs = 0;
-    long long last_total_bytes = 0;
-    
-    struct timeval last_tv, curr_tv;
-    gettimeofday(&last_tv, NULL);
+    struct timeval start_tv, curr_tv;
+    gettimeofday(&start_tv, NULL);
 
     while (!m_args->stop_flag) {
         // 使用 100ms 步进休眠，确保能够极速响应主线程的退出信号
@@ -183,7 +180,7 @@ void *monitor_routine(void *arg) {
         long long current_fail = 0;
         long long current_bytes = 0;
 
-        // 无锁遍历，性能零损耗
+        // 无锁遍历，汇总从启动到现在的绝对总量
         for (int i = 0; i < m_args->thread_count; i++) {
             current_success += m_args->t_args[i].stats.success_count;
             current_bytes   += m_args->t_args[i].stats.total_success_bytes;
@@ -197,24 +194,19 @@ void *monitor_routine(void *arg) {
         }
 
         long long current_total = current_success + current_fail;
-        gettimeofday(&curr_tv, NULL);
-        double elapsed_s = (curr_tv.tv_sec - last_tv.tv_sec) + (curr_tv.tv_usec - last_tv.tv_usec) / 1000000.0;
         
-        if (elapsed_s > 0) {
-            long long req_delta = current_total - last_total_reqs;
-            long long bytes_delta = current_bytes - last_total_bytes;
-            
-            double current_tps = req_delta / elapsed_s;
-            double current_throughput = (bytes_delta / 1024.0 / 1024.0) / elapsed_s;
+        gettimeofday(&curr_tv, NULL);
+        double total_elapsed_s = (curr_tv.tv_sec - start_tv.tv_sec) + (curr_tv.tv_usec - start_tv.tv_usec) / 1000000.0;
+        
+        if (total_elapsed_s > 0) {
+            double cumul_tps = current_total / total_elapsed_s;
+            double cumul_throughput = (current_bytes / 1024.0 / 1024.0) / total_elapsed_s;
             double success_rate = current_total > 0 ? ((double)current_success / current_total) * 100.0 : 0.0;
 
-            printf("[Monitor] Interval: %.1fs | Instant TPS: %8.2f | BW: %8.2f MB/s | Success Rate: %6.2f%% | Total Reqs: %lld\n", 
-                   elapsed_s, current_tps, current_throughput, success_rate, current_total);
+            // 打印累计看板，Success Rate 的精度提升为 %.3f%%
+            printf("[Monitor] RunTime: %8.1fs | Cumul TPS: %8.2f | Cumul BW: %8.2f MB/s | Success Rate: %7.3f%% | Total Reqs: %lld\n", 
+                   total_elapsed_s, cumul_tps, cumul_throughput, success_rate, current_total);
         }
-
-        last_total_reqs = current_total;
-        last_total_bytes = current_bytes;
-        last_tv = curr_tv;
     }
     return NULL;
 }
@@ -325,7 +317,7 @@ int main(int argc, char **argv) {
         }
     }
     
-    // [新增] 启动监控线程
+    // 启动监控线程
     MonitorArgs m_args;
     m_args.t_args = t_args;
     m_args.thread_count = cfg.threads;
@@ -340,7 +332,7 @@ int main(int argc, char **argv) {
         pthread_join(tids[i], NULL);
     }
 
-    // [新增] 通知监控线程退出并等待回收
+    // 通知监控线程退出并等待回收
     m_args.stop_flag = 1;
     pthread_join(monitor_tid, NULL);
 
