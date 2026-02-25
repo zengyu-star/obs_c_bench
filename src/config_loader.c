@@ -50,7 +50,8 @@ static int parse_mix_ops(const char *val, int *ops, int max_ops) {
     return count;
 }
 
-static int load_users_file(const char *filename, Config *cfg) {
+// [修改]: 支持是否为临时模式解析
+int load_users_file(const char *filename, Config *cfg, int is_temp_mode) {
     FILE *fp = fopen(filename, "r");
     if (!fp) {
         printf("[Config Error] Cannot open users file: %s.\n", filename);
@@ -61,7 +62,7 @@ static int load_users_file(const char *filename, Config *cfg) {
     cfg->user_list = (UserCredential *)malloc(sizeof(UserCredential) * cfg->target_user_count);
     memset(cfg->user_list, 0, sizeof(UserCredential) * cfg->target_user_count);
     
-    char line[512];
+    char line[4096]; // 加大 buffer，应对超长 token
     int count = 0;
     while (fgets(line, sizeof(line), fp) && count < cfg->target_user_count) {
         char *clean_line = trim_both(line);
@@ -78,6 +79,13 @@ static int load_users_file(const char *filename, Config *cfg) {
         token = strtok(NULL, ",");
         if(token) strcpy(cfg->user_list[count].sk, trim_both(token)); 
         else continue;
+
+        if (is_temp_mode) {
+            token = strtok(NULL, ",");
+            if(token) strcpy(cfg->user_list[count].security_token, trim_both(token)); 
+        } else {
+            memset(cfg->user_list[count].security_token, 0, sizeof(cfg->user_list[count].security_token));
+        }
 
         count++;
     }
@@ -105,10 +113,8 @@ int load_config(const char *filename, Config *cfg) {
         return -1;
     }
     
-    // [修改]: 默认超时时间设定 (改为秒)
-    cfg->connect_timeout_sec = 10;  // 默认10秒连接超时
-    cfg->request_timeout_sec = 30;  // 默认30秒请求超时
-
+    cfg->connect_timeout_sec = 10; 
+    cfg->request_timeout_sec = 30; 
     strcpy(cfg->protocol, "https");
     cfg->keep_alive = 1;
     cfg->part_size = 5 * 1024 * 1024;
@@ -125,6 +131,7 @@ int load_config(const char *filename, Config *cfg) {
     cfg->threads_per_user = 1;
     cfg->bucket_name_fixed[0] = '\0';
     cfg->bucket_name_prefix[0] = '\0';
+    cfg->is_temporary_token = 0;  // 默认关闭临时凭证
     cfg->gm_mode_switch = 0;
     cfg->mutual_ssl_switch = 0;
     cfg->client_cert_path[0] = '\0';
@@ -157,17 +164,15 @@ int load_config(const char *filename, Config *cfg) {
         if (strcmp(key, "Endpoint") == 0) strcpy(cfg->endpoint, val);
         else if (strcmp(key, "Protocol") == 0) strcpy(cfg->protocol, val);
         else if (strcmp(key, "KeepAlive") == 0) cfg->keep_alive = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
-        
-        // [修改]: 解析超时配置 (改为秒)
         else if (strcmp(key, "ConnectTimeoutSec") == 0) cfg->connect_timeout_sec = atoi(val);
         else if (strcmp(key, "RequestTimeoutSec") == 0) cfg->request_timeout_sec = atoi(val);
-
         else if (strcmp(key, "LogLevel") == 0) cfg->log_level = log_level_from_string(val);
         else if (strcmp(key, "ObjNamePatternHash") == 0) cfg->obj_name_pattern_hash = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "EnableCheckpoint") == 0) cfg->enable_checkpoint = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "UploadFilePath") == 0) strcpy(cfg->upload_file_path, val);
         else if (strcmp(key, "BucketNamePrefix") == 0) strcpy(cfg->bucket_name_prefix, val);
         else if (strcmp(key, "BucketNameFixed") == 0) strcpy(cfg->bucket_name_fixed, val);
+        else if (strcmp(key, "IsTemporaryToken") == 0) cfg->is_temporary_token = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "Users") == 0) cfg->target_user_count = atoi(val);
         else if (strcmp(key, "ThreadsPerUser") == 0) cfg->threads_per_user = atoi(val);
         else if (strcmp(key, "RequestsPerThread") == 0) cfg->requests_per_thread = atoi(val);
@@ -233,29 +238,13 @@ int load_config(const char *filename, Config *cfg) {
     cfg->ssl_min_version = parse_ssl_version_str(ssl_min_str, 1);
     cfg->ssl_max_version = parse_ssl_version_str(ssl_max_str, 0);
 
-    if (load_users_file("users.dat", cfg) < 0) {
-        fclose(fp); return -1;
-    }
-    
-    if (cfg->threads_per_user <= 0) cfg->threads_per_user = 1;
-    cfg->threads = cfg->loaded_user_count * cfg->threads_per_user;
-        
-    printf("[Config] Multi-User Mode: %d Users Loaded. %d Threads/User. Total Threads: %d\n", 
-           cfg->loaded_user_count, cfg->threads_per_user, cfg->threads);
-
     if (cfg->test_case == TEST_CASE_MIX) {
         if (cfg->mix_op_count > 0) cfg->use_mix_mode = 1;
     } else {
         cfg->use_mix_mode = 0;
     }
 
-    if (cfg->enable_data_validation) {
-        printf("[Config] Data Validation: ENABLED\n");
-    }
-    if (cfg->enable_detail_log) {
-        printf("[Config] Detail Request Log: ENABLED\n");
-    }
-
+    // [修改]: 去除此处读取文件和计算 threads 逻辑，将其移至 main.c 中进行时序控制
     fclose(fp);
     return 0;
 }

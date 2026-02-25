@@ -7,33 +7,20 @@
 #include <ctype.h>
 #include <signal.h>
 
-// 全局优雅退出标志
 volatile sig_atomic_t g_graceful_stop = 0;
 
-// [优化]: 升级版的信号处理函数，支持二次强制退出 (Escalated Shutdown)
 void handle_sigint(int sig) {
-    // 静态变量，用于记录接收到 SIGINT 信号的次数
     static volatile sig_atomic_t sigint_count = 0;
     sigint_count++;
 
     if (sigint_count == 1) {
-        // 第一次触发：设置标志位，尝试优雅退出
         g_graceful_stop = 1;
         const char msg[] = "\n[WARN] Received SIGINT (1/2). Initiating graceful shutdown... Please wait.\n"
                            "       Press CTRL+C again to FORCE QUIT if it hangs.\n";
-        // 使用 write 是因为它是异步信号安全 (async-signal-safe) 的函数
-        if (write(STDOUT_FILENO, msg, sizeof(msg) - 1) < 0) {
-            // 忽略错误
-        }
+        if (write(STDOUT_FILENO, msg, sizeof(msg) - 1) < 0) { }
     } else {
-        // 第二次触发：程序可能已陷入死锁，执行暴力退出
         const char msg[] = "\n[FATAL] Received SIGINT (2/2). Force quitting immediately!\n";
-        if (write(STDOUT_FILENO, msg, sizeof(msg) - 1) < 0) {
-            // 忽略错误
-        }
-        
-        // 【核心】：必须使用 _exit(1) 而非 exit(1)。
-        // _exit 会直接陷入内核终止进程，不清理用户态缓冲区，避免在信号上下文中发生死锁。
+        if (write(STDOUT_FILENO, msg, sizeof(msg) - 1) < 0) { }
         _exit(1); 
     }
 }
@@ -49,7 +36,6 @@ const char* log_level_to_string(LogLevel level) {
     }
 }
 
-// 完整的结果汇总与报告保存函数
 void save_benchmark_report(Config *cfg, long long total, 
                            long long success, long long fail, 
                            long long f403, long long f404, long long f409, long long f4other,
@@ -63,7 +49,7 @@ void save_benchmark_report(Config *cfg, long long total,
 
     time_t now = time(NULL);
     struct tm t_res;
-    struct tm *t = localtime_r(&now, &t_res); // 线程安全时间获取
+    struct tm *t = localtime_r(&now, &t_res);
 
     fprintf(fp, "===========================================\n");
     fprintf(fp, "      OBS C SDK Benchmark Execution Report \n");
@@ -78,6 +64,7 @@ void save_benchmark_report(Config *cfg, long long total,
     fprintf(fp, "  Endpoint:          %s\n", cfg->endpoint);
     fprintf(fp, "  Bucket(Fixed):     %s\n", cfg->bucket_name_fixed[0] ? cfg->bucket_name_fixed : "N/A");
     fprintf(fp, "  Bucket(Prefix):    %s\n", cfg->bucket_name_prefix[0] ? cfg->bucket_name_prefix : "N/A");
+    fprintf(fp, "  STS Auth Mode:     %s\n", cfg->is_temporary_token ? "true" : "false");
     
     fprintf(fp, "[Network]\n");
     fprintf(fp, "  Protocol:          %s\n", cfg->protocol);
@@ -118,7 +105,6 @@ void save_benchmark_report(Config *cfg, long long total,
     LOG_INFO("Execution report saved to: %s", filepath);
 }
 
-// 字符串转小写辅助
 void str_tolower(char *dst, const char *src) {
     while(*src) {
         *dst = tolower((unsigned char)*src);
@@ -135,10 +121,8 @@ typedef struct {
     char task_log_dir[256]; 
 } MonitorArgs;
 
-// 监控线程，包含精准的 Process(%) 计算
 void *monitor_routine(void *arg) {
     MonitorArgs *m_args = (MonitorArgs *)arg;
-    
     char rt_filepath[512];
     snprintf(rt_filepath, sizeof(rt_filepath), "%s/realtime.txt", m_args->task_log_dir);
     FILE *rt_fp = fopen(rt_filepath, "w");
@@ -151,14 +135,12 @@ void *monitor_routine(void *arg) {
     gettimeofday(&start_tv, NULL);
 
     while (!m_args->stop_flag && !g_graceful_stop) {
-        // 分段延时，保证能快速响应 stop_flag
         for(int i = 0; i < m_args->interval_sec * 10 && !m_args->stop_flag && !g_graceful_stop; i++) {
             usleep(100000); 
         }
         if (m_args->stop_flag || g_graceful_stop) break;
 
         long long current_success = 0, current_fail = 0, current_bytes = 0;
-
         for (int i = 0; i < m_args->thread_count; i++) {
             current_success += m_args->t_args[i].stats.success_count;
             current_bytes   += m_args->t_args[i].stats.total_success_bytes;
@@ -221,9 +203,7 @@ void *monitor_routine(void *arg) {
 }
 
 int main(int argc, char **argv) {
-    // 忽略 SIGPIPE 信号，防止高并发下 TCP 连接异常导致进程崩溃
     signal(SIGPIPE, SIG_IGN);
-    // 注册优雅退出信号
     signal(SIGINT, handle_sigint);
 
     struct stat st = {0};
@@ -244,7 +224,6 @@ int main(int argc, char **argv) {
              
     if (stat(cfg.task_log_dir, &st) == -1) mkdir(cfg.task_log_dir, 0755);
 
-    // 灵活的命令行参数解析
     const char *config_file = "config.dat";
     int cli_test_case = 0;
     if (argc > 1) {
@@ -252,9 +231,9 @@ int main(int argc, char **argv) {
         else config_file = argv[1];
     }
 
+    // 仅仅加载配置，不提前做耗时计算
     if (load_config(config_file, &cfg) != 0) return 1;
 
-    // 允许通过命令行覆盖 TestCase
     if (cli_test_case > 0) {
         cfg.test_case = cli_test_case;
         if (cli_test_case == TEST_CASE_MIX && cfg.mix_op_count > 0) cfg.use_mix_mode = 1;
@@ -265,10 +244,41 @@ int main(int argc, char **argv) {
     LOG_INFO("--- OBS C SDK Benchmark Tool ---");
     LOG_INFO("Task Output Dir: %s", cfg.task_log_dir);
 
+    // ==========================================================
+    // [前置阶段]: 获取 Token 与加载账户信息，保证不进入最终耗时统计
+    // ==========================================================
+    if (cfg.is_temporary_token) {
+        LOG_INFO("IsTemporaryToken enabled. Fetching STS tokens...");
+        if (strlen(cfg.bucket_name_fixed) == 0) {
+            LOG_ERROR("FATAL: BucketNameFixed MUST be configured in TempToken mode to avoid random 403!");
+            return 1;
+        }
+
+        if (system("python3 generate_temp_ak_sk.py") != 0) {
+            LOG_ERROR("FATAL: Failed to generate temporary credentials.");
+            return 1;
+        }
+        
+        if (load_users_file("temptoken.dat", &cfg, 1) < 0) return 1;
+    } else {
+        if (load_users_file("users.dat", &cfg, 0) < 0) return 1;
+    }
+
+    if (cfg.threads_per_user <= 0) cfg.threads_per_user = 1;
+    cfg.threads = cfg.loaded_user_count * cfg.threads_per_user;
+        
+    printf("[Config] Multi-User Mode: %d Users Loaded. %d Threads/User. Total Threads: %d\n", 
+           cfg.loaded_user_count, cfg.threads_per_user, cfg.threads);
+
+    if (cfg.enable_data_validation) printf("[Config] Data Validation: ENABLED\n");
+    if (cfg.enable_detail_log) printf("[Config] Detail Request Log: ENABLED\n");
+
     obs_status status = obs_initialize(OBS_INIT_ALL);
     if (status != OBS_STATUS_OK) return -1;
 
-    // 计算停止时间戳
+    // ==========================================================
+    // [精准计时开始]
+    // ==========================================================
     double current_ms = 0; 
     struct timespec ts_now;
     clock_gettime(CLOCK_MONOTONIC_COARSE, &ts_now);
@@ -281,7 +291,6 @@ int main(int argc, char **argv) {
     struct timeval main_start_tv, main_end_tv;
     gettimeofday(&main_start_tv, NULL);
 
-    // 多用户与多线程映射分配逻辑
     int global_thread_idx = 0;
     for (int u = 0; u < cfg.loaded_user_count; u++) {
         UserCredential *curr_user = &cfg.user_list[u];
@@ -289,7 +298,6 @@ int main(int argc, char **argv) {
         char target_bucket[256]; 
         memset(target_bucket, 0, sizeof(target_bucket));
 
-        // 确定桶名策略
         if (strlen(cfg.bucket_name_fixed) > 0) {
             strcpy(target_bucket, cfg.bucket_name_fixed);
         } else {
@@ -316,13 +324,19 @@ int main(int argc, char **argv) {
             strcpy(args->effective_sk, curr_user->sk);
             strcpy(args->effective_bucket, target_bucket);
             strcpy(args->username, curr_user->username);
+            
+            // [新增]: 将解析到的 STS Token 传递给线程
+            if (cfg.is_temporary_token) {
+                strcpy(args->effective_token, curr_user->security_token);
+            } else {
+                memset(args->effective_token, 0, sizeof(args->effective_token));
+            }
 
             pthread_create(&tids[global_thread_idx], NULL, worker_routine, args);
             global_thread_idx++;
         }
     }
     
-    // 启动监控线程
     MonitorArgs m_args;
     m_args.t_args = t_args;
     m_args.thread_count = cfg.threads;
@@ -333,10 +347,8 @@ int main(int argc, char **argv) {
     pthread_t monitor_tid;
     pthread_create(&monitor_tid, NULL, monitor_routine, &m_args);
 
-    // 等待所有工作线程结束
     for (int i = 0; i < cfg.threads; i++) pthread_join(tids[i], NULL);
 
-    // 停止监控
     m_args.stop_flag = 1;
     pthread_join(monitor_tid, NULL);
 
@@ -367,7 +379,6 @@ int main(int argc, char **argv) {
         printf("\n[WARN] Benchmark interrupted by user (Graceful Stop).\n");
     }
 
-    // 打印汇总后的 t_ 系列变量
     printf("\n--- Test Result ---\n");
     printf("Actual Duration: %.2f s\n", actual_time_s);
     printf("Total Requests:  %lld\n", total_reqs);
@@ -384,12 +395,10 @@ int main(int argc, char **argv) {
     printf("TPS:             %.2f\n", tps);
     printf("Throughput:      %.2f MB/s\n", throughput_mb);
 
-    // 保存详细报告
     save_benchmark_report(&cfg, total_reqs, total_success, total_fail, 
                           t_403, t_404, t_409, t_4xx, t_5xx, t_other, t_val,
                           tps, throughput_mb);
 
-    // [资源清理]: 释放堆内存，解决 ASAN 内存泄漏
     free(tids); 
     free(t_args);
 
@@ -397,7 +406,6 @@ int main(int argc, char **argv) {
         free(cfg.user_list);
         cfg.user_list = NULL;
     }
-
     for (int i = 0; i < cfg.range_count; i++) {
         if (cfg.range_options[i]) {
             free(cfg.range_options[i]);

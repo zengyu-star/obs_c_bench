@@ -22,7 +22,7 @@
 // 全局优雅退出标志
 extern volatile sig_atomic_t g_graceful_stop;
 
-// [修改]: 定义统一的最大 Key 长度
+// 定义统一的最大 Key 长度
 #define MAX_KEY_LEN             1025
 
 // TestCase 编号定义
@@ -43,18 +43,19 @@ typedef struct {
     char username[64];
     char ak[128];
     char sk[128];
+    char security_token[4096]; // [新增]: 为 STS Token 预留空间
 } UserCredential;
 
 // 请求流水记录结构体
 typedef struct {
     double timestamp_s;
     int op_type;
-    char key[MAX_KEY_LEN]; // [修改]: 扩展为支持 1024 字节
+    char key[MAX_KEY_LEN]; 
     double latency_ms;
-    int status_code;    // 原始 SDK 状态码
-    int http_code;      // 推断出的实际 HTTP 状态码
+    int status_code;    
+    int http_code;      
     long long bytes;
-    char request_id[64];// Request ID
+    char request_id[64];
 } ReqRecord;
 
 typedef struct {
@@ -108,7 +109,8 @@ typedef struct {
     long long mix_loop_count;  
     int use_mix_mode;          
 
-    // --- 安全配置 ---
+    // --- 安全与临时凭证 ---
+    int is_temporary_token;     // [新增]: 临时凭证开关
     int gm_mode_switch;
     long ssl_min_version;
     long ssl_max_version;
@@ -126,7 +128,6 @@ typedef struct {
 
 typedef struct {
     long long success_count;    
-    
     long long fail_403_count;   
     long long fail_404_count;   
     long long fail_409_count;   
@@ -134,9 +135,7 @@ typedef struct {
     long long fail_5xx_count;   
     long long fail_other_count; 
     long long fail_validation_count; 
-
     long long total_success_bytes; 
-
     double total_latency_ms;
     double max_latency_ms;
     double min_latency_ms;
@@ -151,6 +150,7 @@ typedef struct {
 
     char effective_ak[128];
     char effective_sk[128];
+    char effective_token[4096]; // [新增]: 线程级 Token 传递
     char effective_bucket[128];
     char username[64];
     
@@ -161,6 +161,7 @@ typedef struct {
 
 // 函数声明
 int load_config(const char *filename, Config *cfg);
+int load_users_file(const char *filename, Config *cfg, int is_temp_mode); // [导出]
 void *worker_routine(void *arg);
 void fill_pattern_buffer(char *buf, size_t size, int seed);
 

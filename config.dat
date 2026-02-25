@@ -88,3 +88,9 @@ EnableDetailLog=true
 # 防卡死超时设置 (秒)
 ConnectTimeoutSec=10
 RequestTimeoutSec=30
+
+# --------------------------------------------------------------
+# 9. 是否启用 STS 临时安全凭证模式 (true/false)
+# --------------------------------------------------------------
+# 若为 true，工具启动发流前将阻塞执行 generate_temp_ak_sk.py，并加载 temptoken.dat
+IsTemporaryToken=false

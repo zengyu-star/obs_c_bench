@@ -186,6 +186,7 @@ typedef struct {
     char *bucket_name;
     char *access_key;
     char *secret_access_key;
+	char *token; 
     obs_protocol protocol;
 } obs_bucket_context;
 

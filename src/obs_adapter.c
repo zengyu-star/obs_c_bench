@@ -132,16 +132,24 @@ void upload_file_complete_callback(obs_status status, char *result_message, int 
     }
 }
 
+// [修改]: 核心底层配置初始化函数，安全注入临时凭证
 static void setup_options(obs_options *option, WorkerArgs *args) {
     memset(option, 0, sizeof(obs_options));
     init_obs_options(option);
+    
     option->bucket_options.host_name = args->config->endpoint;
     option->bucket_options.bucket_name = args->effective_bucket;
     option->bucket_options.access_key = args->effective_ak;
     option->bucket_options.secret_access_key = args->effective_sk;
+    
+    // [核心新增]: 如果开启了临时凭证模式且有效，挂载 SecurityToken
+    if (args->config->is_temporary_token && strlen(args->effective_token) > 0) {
+		option->bucket_options.token = args->effective_token;
+    }
+
     option->bucket_options.protocol = (strcasecmp(args->config->protocol, "http") == 0) ? OBS_PROTOCOL_HTTP : OBS_PROTOCOL_HTTPS;
     
-    // [修改]: 直接注入秒级别的配置到 libcurl 选项中
+    // 注入秒级别的配置到 libcurl 选项中
     option->request_options.connect_time = args->config->connect_timeout_sec;
     option->request_options.max_connected_time = args->config->request_timeout_sec;
 
