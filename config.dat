@@ -16,7 +16,7 @@ LogLevel=INFO
 # 加载 users.dat 中的前 N 个用户
 Users=1
 # 每个用户启动的线程数 (总线程数 = Users * ThreadsPerUser)
-ThreadsPerUser=10
+ThreadsPerUser=1
 
 # 智能桶名生成规则：
 # - 最高优先级: BucketNameFixed (如果不为空，所有请求都强制打向这个桶)
@@ -34,7 +34,7 @@ TestCase=201
 # RunSeconds: 按时间限制运行 (留空或 0 表示不限时)
 RunSeconds=
 # RequestsPerThread: 按每个线程的请求量限制 (留空或 0 表示不限制)
-RequestsPerThread=1000
+RequestsPerThread=1
 
 # 混合操作配置 (仅在 TestCase=900 或通过 CLI 强制开启混压时生效)
 MixOperation=201,202,204
@@ -93,4 +93,5 @@ RequestTimeoutSec=30
 # 9. 是否启用 STS 临时安全凭证模式 (true/false)
 # --------------------------------------------------------------
 # 若为 true，工具启动发流前将阻塞执行 generate_temp_ak_sk.py，并加载 temptoken.dat
-IsTemporaryToken=false
+IsTemporaryToken=true
+ 

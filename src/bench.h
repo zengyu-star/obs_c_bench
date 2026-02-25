@@ -43,7 +43,8 @@ typedef struct {
     char username[64];
     char ak[128];
     char sk[128];
-    char security_token[4096]; // [新增]: 为 STS Token 预留空间
+    char security_token[4096]; 
+    char original_ak[128]; // [新增]: 专门存储永久 AK，仅用作桶名路由种子
 } UserCredential;
 
 // 请求流水记录结构体
@@ -110,7 +111,7 @@ typedef struct {
     int use_mix_mode;          
 
     // --- 安全与临时凭证 ---
-    int is_temporary_token;     // [新增]: 临时凭证开关
+    int is_temporary_token;     
     int gm_mode_switch;
     long ssl_min_version;
     long ssl_max_version;
@@ -150,7 +151,7 @@ typedef struct {
 
     char effective_ak[128];
     char effective_sk[128];
-    char effective_token[4096]; // [新增]: 线程级 Token 传递
+    char effective_token[4096]; 
     char effective_bucket[128];
     char username[64];
     
@@ -161,7 +162,7 @@ typedef struct {
 
 // 函数声明
 int load_config(const char *filename, Config *cfg);
-int load_users_file(const char *filename, Config *cfg, int is_temp_mode); // [导出]
+int load_users_file(const char *filename, Config *cfg, int is_temp_mode); 
 void *worker_routine(void *arg);
 void fill_pattern_buffer(char *buf, size_t size, int seed);
 

@@ -50,7 +50,6 @@ static int parse_mix_ops(const char *val, int *ops, int max_ops) {
     return count;
 }
 
-// [修改]: 支持是否为临时模式解析
 int load_users_file(const char *filename, Config *cfg, int is_temp_mode) {
     FILE *fp = fopen(filename, "r");
     if (!fp) {
@@ -62,7 +61,7 @@ int load_users_file(const char *filename, Config *cfg, int is_temp_mode) {
     cfg->user_list = (UserCredential *)malloc(sizeof(UserCredential) * cfg->target_user_count);
     memset(cfg->user_list, 0, sizeof(UserCredential) * cfg->target_user_count);
     
-    char line[4096]; // 加大 buffer，应对超长 token
+    char line[4096]; 
     int count = 0;
     while (fgets(line, sizeof(line), fp) && count < cfg->target_user_count) {
         char *clean_line = trim_both(line);
@@ -83,8 +82,15 @@ int load_users_file(const char *filename, Config *cfg, int is_temp_mode) {
         if (is_temp_mode) {
             token = strtok(NULL, ",");
             if(token) strcpy(cfg->user_list[count].security_token, trim_both(token)); 
+            
+            // [新增]: 解析第5列 original_ak
+            token = strtok(NULL, ",");
+            if(token) strcpy(cfg->user_list[count].original_ak, trim_both(token)); 
+            else memset(cfg->user_list[count].original_ak, 0, sizeof(cfg->user_list[count].original_ak));
         } else {
             memset(cfg->user_list[count].security_token, 0, sizeof(cfg->user_list[count].security_token));
+            // 普通模式下，原始 AK 即为当前 AK
+            strcpy(cfg->user_list[count].original_ak, cfg->user_list[count].ak);
         }
 
         count++;
@@ -131,7 +137,7 @@ int load_config(const char *filename, Config *cfg) {
     cfg->threads_per_user = 1;
     cfg->bucket_name_fixed[0] = '\0';
     cfg->bucket_name_prefix[0] = '\0';
-    cfg->is_temporary_token = 0;  // 默认关闭临时凭证
+    cfg->is_temporary_token = 0;  
     cfg->gm_mode_switch = 0;
     cfg->mutual_ssl_switch = 0;
     cfg->client_cert_path[0] = '\0';
@@ -244,7 +250,6 @@ int load_config(const char *filename, Config *cfg) {
         cfg->use_mix_mode = 0;
     }
 
-    // [修改]: 去除此处读取文件和计算 threads 逻辑，将其移至 main.c 中进行时序控制
     fclose(fp);
     return 0;
 }

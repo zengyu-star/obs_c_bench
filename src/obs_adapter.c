@@ -95,7 +95,9 @@ obs_status get_buffer_callback_optimized(int buffer_size, const char *buffer, vo
         
         if (memcmp(buffer + bytes_checked, args->pattern_buffer + offset, to_check) != 0) {
              ctx->validation_failed = 1;
-             LOG_ERROR("[DATA_CORRUPTION] Object: %s, Abs Offset: %lld, Pattern Offset: %lld, Check Len: %d", 
+             // 在捕获到数据不一致时，记录下 Request ID
+             LOG_ERROR("[DATA_CORRUPTION] ReqID: %s, ObjectCtx: %s, Abs Offset: %lld, Pattern Offset: %lld, Check Len: %d", 
+                       (strlen(ctx->request_id) > 0) ? ctx->request_id : "UNKNOWN_REQ_ID",
                        args->username, absolute_pos + bytes_checked, offset, to_check);
              return OBS_STATUS_InternalError; 
         }
@@ -132,7 +134,6 @@ void upload_file_complete_callback(obs_status status, char *result_message, int 
     }
 }
 
-// [修改]: 核心底层配置初始化函数，安全注入临时凭证
 static void setup_options(obs_options *option, WorkerArgs *args) {
     memset(option, 0, sizeof(obs_options));
     init_obs_options(option);
@@ -142,14 +143,12 @@ static void setup_options(obs_options *option, WorkerArgs *args) {
     option->bucket_options.access_key = args->effective_ak;
     option->bucket_options.secret_access_key = args->effective_sk;
     
-    // [核心新增]: 如果开启了临时凭证模式且有效，挂载 SecurityToken
     if (args->config->is_temporary_token && strlen(args->effective_token) > 0) {
-		option->bucket_options.token = args->effective_token;
+        option->bucket_options.token = args->effective_token;
     }
 
     option->bucket_options.protocol = (strcasecmp(args->config->protocol, "http") == 0) ? OBS_PROTOCOL_HTTP : OBS_PROTOCOL_HTTPS;
     
-    // 注入秒级别的配置到 libcurl 选项中
     option->request_options.connect_time = args->config->connect_timeout_sec;
     option->request_options.max_connected_time = args->config->request_timeout_sec;
 
@@ -182,9 +181,11 @@ obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size,
 
     put_object(&option, key, object_size, &put_props, NULL, &handler, &ctx);
     
+    // 【修改】第一时间抢救 Request ID 传递给流水
     if (out_req_id && strlen(ctx.request_id) > 0) {
         strcpy(out_req_id, ctx.request_id);
     }
+    
     return ctx.ret_status;
 }
 
@@ -249,9 +250,16 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str, char 
 
     get_object(&option, &obj_info, &conditions, NULL, &handler, &ctx);
     
+    // 【核心修复】将 Request ID 的透传提前到任何 Early Return 之前
+    if (out_req_id && strlen(ctx.request_id) > 0) {
+        strcpy(out_req_id, ctx.request_id);
+    }
+
+    // 随后再进行业务层面的 Validation 校验和提前返回逻辑
     if (ctx.ret_status == OBS_STATUS_OK && ctx.expected_content_length > 0) {
         if (ctx.total_processed != ctx.expected_content_length) {
-            LOG_ERROR("Data Incomplete! Key: %s, Expected: %lld, Got: %lld", 
+            LOG_ERROR("[DATA_INCOMPLETE] ReqID: %s, Key: %s, Expected: %lld, Got: %lld", 
+                      (strlen(ctx.request_id) > 0) ? ctx.request_id : "UNKNOWN_REQ_ID",
                       key, ctx.expected_content_length, ctx.total_processed);
             args->stats.fail_validation_count++;
             return OBS_STATUS_InternalError;
@@ -267,9 +275,6 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str, char 
         args->stats.total_success_bytes += ctx.total_processed;
     }
 
-    if (out_req_id && strlen(ctx.request_id) > 0) {
-        strcpy(out_req_id, ctx.request_id);
-    }
     return ctx.ret_status;
 }
 
@@ -282,11 +287,14 @@ obs_status run_delete_benchmark(WorkerArgs *args, char *key, char *out_req_id) {
     obs_response_handler handler = {0};
     handler.properties_callback = &response_properties_callback;
     handler.complete_callback = &response_complete_callback;
+    
     delete_object(&option, &obj_info, &handler, &ctx);
 
+    // 【修改】第一时间抢救 Request ID 传递给流水
     if (out_req_id && strlen(ctx.request_id) > 0) {
         strcpy(out_req_id, ctx.request_id);
     }
+    
     return ctx.ret_status;
 }
 
@@ -298,11 +306,14 @@ obs_status run_list_benchmark(WorkerArgs *args, char *out_req_id) {
     handler.response_handler.properties_callback = &response_properties_callback;
     handler.response_handler.complete_callback = &response_complete_callback;
     handler.list_Objects_callback = &list_objects_callback;
+    
     list_bucket_objects(&option, args->config->key_prefix, NULL, NULL, 100, &handler, &ctx);
     
+    // 【修改】第一时间抢救 Request ID 传递给流水
     if (out_req_id && strlen(ctx.request_id) > 0) {
         strcpy(out_req_id, ctx.request_id);
     }
+    
     return ctx.ret_status;
 }
 
@@ -339,9 +350,11 @@ obs_status run_upload_file_benchmark(WorkerArgs *args, char *key, char *out_req_
 
     upload_file(&option, key, NULL, &upload_conf, server_cb, &handler, &ctx);
     
+    // 【修改】第一时间抢救 Request ID 传递给流水
     if (out_req_id && strlen(ctx.request_id) > 0) {
         strcpy(out_req_id, ctx.request_id);
     }
+    
     return ctx.ret_status;
 }
 

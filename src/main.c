@@ -231,7 +231,6 @@ int main(int argc, char **argv) {
         else config_file = argv[1];
     }
 
-    // 仅仅加载配置，不提前做耗时计算
     if (load_config(config_file, &cfg) != 0) return 1;
 
     if (cli_test_case > 0) {
@@ -245,17 +244,17 @@ int main(int argc, char **argv) {
     LOG_INFO("Task Output Dir: %s", cfg.task_log_dir);
 
     // ==========================================================
-    // [前置阶段]: 获取 Token 与加载账户信息，保证不进入最终耗时统计
+    // [前置阶段]: 拦截生成凭证
     // ==========================================================
     if (cfg.is_temporary_token) {
-        LOG_INFO("IsTemporaryToken enabled. Fetching STS tokens...");
-        if (strlen(cfg.bucket_name_fixed) == 0) {
-            LOG_ERROR("FATAL: BucketNameFixed MUST be configured in TempToken mode to avoid random 403!");
-            return 1;
-        }
+        LOG_INFO("IsTemporaryToken enabled. Fetching STS tokens for %d users...", cfg.target_user_count);
 
-        if (system("python3 generate_temp_ak_sk.py") != 0) {
-            LOG_ERROR("FATAL: Failed to generate temporary credentials.");
+        // [核心优化]: 将 cfg.target_user_count 作为参数传递给 python 脚本
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "python3 generate_temp_ak_sk.py %d", cfg.target_user_count);
+
+        if (system(cmd) != 0) {
+            LOG_ERROR("FATAL: Failed to generate temporary credentials. (Command: %s)", cmd);
             return 1;
         }
         
@@ -276,9 +275,6 @@ int main(int argc, char **argv) {
     obs_status status = obs_initialize(OBS_INIT_ALL);
     if (status != OBS_STATUS_OK) return -1;
 
-    // ==========================================================
-    // [精准计时开始]
-    // ==========================================================
     double current_ms = 0; 
     struct timespec ts_now;
     clock_gettime(CLOCK_MONOTONIC_COARSE, &ts_now);
@@ -302,7 +298,9 @@ int main(int argc, char **argv) {
             strcpy(target_bucket, cfg.bucket_name_fixed);
         } else {
             char ak_lower[128] = {0};
-            if (strlen(curr_user->ak) > 0) str_tolower(ak_lower, curr_user->ak);
+            if (strlen(curr_user->original_ak) > 0) {
+                str_tolower(ak_lower, curr_user->original_ak);
+            }
 
             if (strlen(cfg.bucket_name_prefix) > 0) {
                 if (strlen(ak_lower) > 0) snprintf(target_bucket, sizeof(target_bucket), "%s.%s", ak_lower, cfg.bucket_name_prefix);
@@ -325,7 +323,6 @@ int main(int argc, char **argv) {
             strcpy(args->effective_bucket, target_bucket);
             strcpy(args->username, curr_user->username);
             
-            // [新增]: 将解析到的 STS Token 传递给线程
             if (cfg.is_temporary_token) {
                 strcpy(args->effective_token, curr_user->security_token);
             } else {
@@ -355,7 +352,6 @@ int main(int argc, char **argv) {
     gettimeofday(&main_end_tv, NULL);
     double actual_time_s = (main_end_tv.tv_sec - main_start_tv.tv_sec) + (main_end_tv.tv_usec - main_start_tv.tv_usec) / 1000000.0;
 
-    // 核心结果汇总逻辑
     long long total_success = 0, t_403=0, t_404=0, t_409=0, t_4xx=0, t_5xx=0, t_other=0, t_val=0, total_bytes=0;
 
     for (int i = 0; i < cfg.threads; i++) {
