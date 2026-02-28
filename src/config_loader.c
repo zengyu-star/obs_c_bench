@@ -125,6 +125,7 @@ int load_config(const char *filename, Config *cfg) {
     cfg->client_sign_key_password[0] = '\0';
     cfg->client_enc_cert_path[0] = '\0';
     cfg->client_enc_key_path[0] = '\0';
+    cfg->ssl_cipher_list[0] = '\0';
     
     cfg->enable_data_validation = 0;
     cfg->enable_detail_log = 0;
@@ -217,6 +218,7 @@ int load_config(const char *filename, Config *cfg) {
         else if (strcmp(key, "ClientSignKeyPassword") == 0) strcpy(cfg->client_sign_key_password, val);
         else if (strcmp(key, "ClientEncCertPath") == 0) strcpy(cfg->client_enc_cert_path, val);
         else if (strcmp(key, "ClientEncKeyPath") == 0) strcpy(cfg->client_enc_key_path, val);
+        else if (strcmp(key, "SslCipherList") == 0) strcpy(cfg->ssl_cipher_list, val);
 
         else if (strcmp(key, "EnableDataValidation") == 0) cfg->enable_data_validation = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "EnableDetailLog") == 0) cfg->enable_detail_log = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);

@@ -173,6 +173,10 @@ static void setup_options(obs_options *option, WorkerArgs *args) {
         option->request_options.client_enc_cert_path = args->config->client_enc_cert_path;
         option->request_options.client_enc_key_path = args->config->client_enc_key_path;
     }
+
+    if (strlen(args->config->ssl_cipher_list) > 0) {
+        option->request_options.ssl_cipher_list = args->config->ssl_cipher_list;
+    }
 }
 
 obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size, char *out_req_id) {

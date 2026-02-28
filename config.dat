@@ -85,6 +85,9 @@ ClientSignKeyPassword=
 ClientEncCertPath=
 ClientEncKeyPath=
 
+# TLS/国密 密码套件列表 (选填，例如：ECDHE-RSA-AES128-GCM-SHA256 或 ECC-SM4-SM3)
+SslCipherList=
+
 # --------------------------------------------------------------
 # 7. 监控与日志记录 (Logging & Monitor)
 # --------------------------------------------------------------

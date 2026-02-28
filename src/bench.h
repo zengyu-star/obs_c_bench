@@ -120,6 +120,7 @@ typedef struct {
     char client_sign_key_password[256];
     char client_enc_cert_path[256];
     char client_enc_key_path[256];
+    char ssl_cipher_list[512]; // [新增]: 密码套件列表
 
     // --- 数据校验与日志 ---
     int enable_data_validation;

@@ -205,6 +205,8 @@ typedef struct {
     obs_gm_mode_switch gm_mode_switch;
     char *client_enc_cert_path;
     char *client_enc_key_path;
+    
+    char *ssl_cipher_list; // [新增]: 密码套件列表
 
 } obs_http_request_option;
 
