@@ -194,13 +194,18 @@ typedef struct {
     int connect_time;
     int max_connected_time;
     bool keep_alive;
-    obs_gm_mode_switch gm_mode_switch;   
-    long ssl_min_version;                
-    long ssl_max_version;                
+    
+    // --- 同步真实 SDK 最新国密与双向认证字段 ---
+    char* server_cert_path;
     obs_mutual_ssl_switch mutual_ssl_switch;
-    char* client_cert_path;
-    char* client_key_path;
-    char* client_key_password;
+    char *client_sign_cert_path;
+    char *client_sign_key_path;
+    char *client_sign_key_password;
+    
+    obs_gm_mode_switch gm_mode_switch;
+    char *client_enc_cert_path;
+    char *client_enc_key_path;
+
 } obs_http_request_option;
 
 typedef struct {

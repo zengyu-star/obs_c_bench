@@ -95,7 +95,6 @@ obs_status get_buffer_callback_optimized(int buffer_size, const char *buffer, vo
         
         if (memcmp(buffer + bytes_checked, args->pattern_buffer + offset, to_check) != 0) {
              ctx->validation_failed = 1;
-             // 在捕获到数据不一致时，记录下 Request ID
              LOG_ERROR("[DATA_CORRUPTION] ReqID: %s, ObjectCtx: %s, Abs Offset: %lld, Pattern Offset: %lld, Check Len: %d", 
                        (strlen(ctx->request_id) > 0) ? ctx->request_id : "UNKNOWN_REQ_ID",
                        args->username, absolute_pos + bytes_checked, offset, to_check);
@@ -151,18 +150,28 @@ static void setup_options(obs_options *option, WorkerArgs *args) {
     
     option->request_options.connect_time = args->config->connect_timeout_sec;
     option->request_options.max_connected_time = args->config->request_timeout_sec;
-
     option->request_options.keep_alive = (args->config->keep_alive != 0);
-    option->request_options.gm_mode_switch = args->config->gm_mode_switch ? 1 : 0;
-    option->request_options.ssl_min_version = args->config->ssl_min_version;
-    option->request_options.ssl_max_version = args->config->ssl_max_version;
+
+    // --- 新版国密及双向认证参数透传 ---
+    option->request_options.gm_mode_switch = args->config->gm_mode_switch ? OBS_GM_MODE_OPEN : OBS_GM_MODE_CLOSE;
+    option->request_options.mutual_ssl_switch = args->config->mutual_ssl_switch ? OBS_MUTUAL_SSL_OPEN : OBS_MUTUAL_SSL_CLOSE;
+
+    if (strlen(args->config->server_cert_path) > 0) {
+        option->request_options.server_cert_path = args->config->server_cert_path;
+    }
+
     if (args->config->mutual_ssl_switch) {
-        option->request_options.mutual_ssl_switch = 1; 
-        option->request_options.client_cert_path = args->config->client_cert_path;
-        option->request_options.client_key_path = args->config->client_key_path;
-        if (strlen(args->config->client_key_password) > 0) {
-            option->request_options.client_key_password = args->config->client_key_password;
+        option->request_options.client_sign_cert_path = args->config->client_sign_cert_path;
+        option->request_options.client_sign_key_path = args->config->client_sign_key_path;
+        
+        if (strlen(args->config->client_sign_key_password) > 0) {
+            option->request_options.client_sign_key_password = args->config->client_sign_key_password;
         }
+    }
+
+    if (args->config->gm_mode_switch) {
+        option->request_options.client_enc_cert_path = args->config->client_enc_cert_path;
+        option->request_options.client_enc_key_path = args->config->client_enc_key_path;
     }
 }
 
@@ -181,7 +190,6 @@ obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size,
 
     put_object(&option, key, object_size, &put_props, NULL, &handler, &ctx);
     
-    // 【修改】第一时间抢救 Request ID 传递给流水
     if (out_req_id && strlen(ctx.request_id) > 0) {
         strcpy(out_req_id, ctx.request_id);
     }
@@ -250,12 +258,10 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str, char 
 
     get_object(&option, &obj_info, &conditions, NULL, &handler, &ctx);
     
-    // 【核心修复】将 Request ID 的透传提前到任何 Early Return 之前
     if (out_req_id && strlen(ctx.request_id) > 0) {
         strcpy(out_req_id, ctx.request_id);
     }
 
-    // 随后再进行业务层面的 Validation 校验和提前返回逻辑
     if (ctx.ret_status == OBS_STATUS_OK && ctx.expected_content_length > 0) {
         if (ctx.total_processed != ctx.expected_content_length) {
             LOG_ERROR("[DATA_INCOMPLETE] ReqID: %s, Key: %s, Expected: %lld, Got: %lld", 
@@ -290,7 +296,6 @@ obs_status run_delete_benchmark(WorkerArgs *args, char *key, char *out_req_id) {
     
     delete_object(&option, &obj_info, &handler, &ctx);
 
-    // 【修改】第一时间抢救 Request ID 传递给流水
     if (out_req_id && strlen(ctx.request_id) > 0) {
         strcpy(out_req_id, ctx.request_id);
     }
@@ -309,7 +314,6 @@ obs_status run_list_benchmark(WorkerArgs *args, char *out_req_id) {
     
     list_bucket_objects(&option, args->config->key_prefix, NULL, NULL, 100, &handler, &ctx);
     
-    // 【修改】第一时间抢救 Request ID 传递给流水
     if (out_req_id && strlen(ctx.request_id) > 0) {
         strcpy(out_req_id, ctx.request_id);
     }
@@ -350,7 +354,6 @@ obs_status run_upload_file_benchmark(WorkerArgs *args, char *key, char *out_req_
 
     upload_file(&option, key, NULL, &upload_conf, server_cb, &handler, &ctx);
     
-    // 【修改】第一时间抢救 Request ID 传递给流水
     if (out_req_id && strlen(ctx.request_id) > 0) {
         strcpy(out_req_id, ctx.request_id);
     }

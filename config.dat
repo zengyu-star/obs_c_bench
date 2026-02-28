@@ -65,16 +65,25 @@ UploadFilePath=./test_data.bin
 EnableCheckpoint=true
 
 # --------------------------------------------------------------
-# 6. 安全与加密 (Security & TLS)
+# 6. 安全与加密 (Security & Guomi TLS)
 # --------------------------------------------------------------
+# 是否开启国密模式 (true/false)
 GmModeSwitch=false
-SslMinVersion=1.2
-SslMaxVersion=1.3
-
+# 是否开启双向认证 (true/false)
 MutualSslSwitch=false
-ClientCertPath=
-ClientKeyPath=
-ClientKeyPassword=
+
+# 服务端证书路径 (MutualSslSwitch 或 GmModeSwitch 为 true 时必填)
+ServerCertPath=
+
+# 客户端签名证书和私钥 (MutualSslSwitch 为 true 时必填)
+ClientSignCertPath=
+ClientSignKeyPath=
+# 客户端签名私钥密码 (选填)
+ClientSignKeyPassword=
+
+# 客户端加密证书和私钥 (GmModeSwitch 为 true 时必填)
+ClientEncCertPath=
+ClientEncKeyPath=
 
 # --------------------------------------------------------------
 # 7. 监控与日志记录 (Logging & Monitor)
@@ -94,4 +103,3 @@ RequestTimeoutSec=30
 # --------------------------------------------------------------
 # 若为 true，工具启动发流前将阻塞执行 generate_temp_ak_sk.py，并加载 temptoken.dat
 IsTemporaryToken=true
- 

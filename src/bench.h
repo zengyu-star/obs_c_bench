@@ -113,12 +113,13 @@ typedef struct {
     // --- 安全与临时凭证 ---
     int is_temporary_token;     
     int gm_mode_switch;
-    long ssl_min_version;
-    long ssl_max_version;
     int mutual_ssl_switch;
-    char client_cert_path[256];
-    char client_key_path[256];
-    char client_key_password[256];
+    char server_cert_path[256];
+    char client_sign_cert_path[256];
+    char client_sign_key_path[256];
+    char client_sign_key_password[256];
+    char client_enc_cert_path[256];
+    char client_enc_key_path[256];
 
     // --- 数据校验与日志 ---
     int enable_data_validation;
