@@ -142,6 +142,13 @@ static void setup_options(obs_options *option, WorkerArgs *args) {
     option->bucket_options.access_key = args->effective_ak;
     option->bucket_options.secret_access_key = args->effective_sk;
     
+    // 如果开启了双向认证 (自定义域名场景)，则启用 CNAME 模式，禁止 SDK 拼接 桶名.Endpoint
+    if (args->config->mutual_ssl_switch) {
+        option->bucket_options.useCname = true;
+    } else {
+        option->bucket_options.useCname = false;
+    }
+
     if (args->config->is_temporary_token && strlen(args->effective_token) > 0) {
         option->bucket_options.token = args->effective_token;
     }

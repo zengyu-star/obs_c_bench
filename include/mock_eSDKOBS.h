@@ -180,10 +180,15 @@ typedef enum
 
 typedef enum { OBS_GM_MODE_CLOSE = 0, OBS_GM_MODE_OPEN = 1 } obs_gm_mode_switch;
 typedef enum { OBS_MUTUAL_SSL_CLOSE = 0, OBS_MUTUAL_SSL_OPEN = 1 } obs_mutual_ssl_switch;
+typedef enum { OBS_URI_STYLE_VIRTUALHOST = 0, OBS_URI_STYLE_PATH = 1 } obs_uri_style;
 
 typedef struct {
     char *host_name;
     char *bucket_name;
+    
+    bool useCname; 
+    obs_uri_style uri_style; 
+    
     char *access_key;
     char *secret_access_key;
 	char *token; 
