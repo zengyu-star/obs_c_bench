@@ -1130,17 +1130,17 @@ typedef struct obs_http_request_option
     long buffer_size;
     char* server_cert_path;
 	bool curl_log_verbose;
-	// 双向证书认证配置
-    obs_mutual_ssl_switch mutual_ssl_switch;
-    char* client_cert_path;
-    char* client_key_path;
-    char* client_key_password;
-    // SSL配置
-    obs_gm_mode_switch gm_mode_switch;   // 国密模式开关
-    long ssl_min_version;                // SSL最小版本（可选，默认TLSv1.2）
-    long ssl_max_version;                // SSL最大版本（可选，默认TLSv1.3）
+	obs_mutual_ssl_switch mutual_ssl_switch;	// 双向认证开关
+	char *client_sign_cert_path;			   // 客户端签名证书路径（PEM格式）
+	char *client_sign_key_path; 			   // 客户端签名私钥路径（PEM格式）
+	char *client_sign_key_password; 			   // 客户端签名密码（字符串）
+	
+	// ========== 国密相关配置 ==========
+	obs_gm_mode_switch gm_mode_switch;		   // 国密模式开关
+	char *client_enc_cert_path; 			   // 国密加密证书路径（PEM格式）
+	char *client_enc_key_path;				   // 国密加密私钥路径（PEM格式）
+	} obs_http_request_option;
 
-} obs_http_request_option;
 
 typedef struct temp_auth_configure
 {
