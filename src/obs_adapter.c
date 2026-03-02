@@ -142,7 +142,6 @@ static void setup_options(obs_options *option, WorkerArgs *args) {
     option->bucket_options.access_key = args->effective_ak;
     option->bucket_options.secret_access_key = args->effective_sk;
     
-    // 如果开启了双向认证 (自定义域名场景)，则启用 CNAME 模式，禁止 SDK 拼接 桶名.Endpoint
     if (args->config->mutual_ssl_switch) {
         option->bucket_options.useCname = true;
     } else {
@@ -155,11 +154,11 @@ static void setup_options(obs_options *option, WorkerArgs *args) {
 
     option->bucket_options.protocol = (strcasecmp(args->config->protocol, "http") == 0) ? OBS_PROTOCOL_HTTP : OBS_PROTOCOL_HTTPS;
     
-    option->request_options.connect_time = args->config->connect_timeout_sec;
-    option->request_options.max_connected_time = args->config->request_timeout_sec;
+    // [修复]: 将秒转换为 SDK 要求的毫秒值
+    option->request_options.connect_time = args->config->connect_timeout_sec * 1000;
+    option->request_options.max_connected_time = args->config->request_timeout_sec * 1000;
     option->request_options.keep_alive = (args->config->keep_alive != 0);
 
-    // --- 新版国密及双向认证参数透传 ---
     option->request_options.gm_mode_switch = args->config->gm_mode_switch ? OBS_GM_MODE_OPEN : OBS_GM_MODE_CLOSE;
     option->request_options.mutual_ssl_switch = args->config->mutual_ssl_switch ? OBS_MUTUAL_SSL_OPEN : OBS_MUTUAL_SSL_CLOSE;
 
@@ -335,7 +334,87 @@ obs_status run_list_benchmark(WorkerArgs *args, char *out_req_id) {
 obs_status run_multipart_benchmark(WorkerArgs *args, char *key, char *out_req_id) {
     obs_options option;
     setup_options(&option, args);
-    return OBS_STATUS_OK; 
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0, {0}};
+
+    obs_put_properties put_props;
+    init_put_properties(&put_props);
+
+    // ==========================================
+    // 第一步：初始化多段上传任务 (Initiate)
+    // ==========================================
+    char upload_id[256] = {0};
+    obs_response_handler init_handler = {0};
+    init_handler.properties_callback = &response_properties_callback;
+    init_handler.complete_callback = &response_complete_callback;
+
+    initiate_multi_part_upload(&option, key, sizeof(upload_id), upload_id, 
+                               &put_props, NULL, &init_handler, &ctx);
+                               
+    if (ctx.ret_status != OBS_STATUS_OK) {
+        return ctx.ret_status;
+    }
+
+    // ==========================================
+    // 第二步：循环并发/串行上传分段 (Upload Part)
+    // ==========================================
+    long long part_size = args->config->part_size > 0 ? args->config->part_size : (5 * 1024 * 1024);
+    int part_count = args->config->parts_for_each_upload_id;
+
+    obs_complete_upload_Info *complete_infos = (obs_complete_upload_Info *)calloc(part_count, sizeof(obs_complete_upload_Info));
+    if (!complete_infos) {
+        LOG_ERROR("Failed to allocate memory for multipart upload info");
+        return OBS_STATUS_InternalError;
+    }
+
+    for (int i = 0; i < part_count; i++) {
+        long long current_part_size = part_size;
+
+        obs_upload_part_info part_info = {0};
+        part_info.part_number = i + 1;
+        part_info.upload_id = upload_id;
+
+        obs_upload_handler up_handler = {0};
+        up_handler.response_handler.properties_callback = &response_properties_callback;
+        up_handler.response_handler.complete_callback = &response_complete_callback;
+        
+        up_handler.upload_data_callback = (obs_upload_data_callback *)&put_buffer_callback_optimized; 
+
+        upload_part(&option, key, &part_info, current_part_size, &put_props, NULL, &up_handler, &ctx);
+
+        if (ctx.ret_status != OBS_STATUS_OK) {
+            for (int j = 0; j < i; j++) {
+                if (complete_infos[j].etag) free(complete_infos[j].etag);
+            }
+            free(complete_infos);
+            return ctx.ret_status;
+        }
+        
+        complete_infos[i].part_number = i + 1;
+        complete_infos[i].etag = strdup(ctx.returned_etag);
+    }
+
+    // ==========================================
+    // 第三步：合并分段 (Complete)
+    // ==========================================
+    obs_complete_multi_part_upload_handler comp_handler = {0};
+    comp_handler.response_handler.properties_callback = &response_properties_callback;
+    comp_handler.response_handler.complete_callback = &response_complete_callback;
+    
+    comp_handler.complete_multipart_upload_callback = &complete_multipart_upload_callback;
+
+    complete_multi_part_upload(&option, key, upload_id, part_count, complete_infos, 
+                               &put_props, &comp_handler, &ctx);
+
+    if (out_req_id && strlen(ctx.request_id) > 0) {
+        strcpy(out_req_id, ctx.request_id);
+    }
+
+    for (int i = 0; i < part_count; i++) {
+        if (complete_infos[i].etag) free(complete_infos[i].etag);
+    }
+    free(complete_infos);
+
+    return ctx.ret_status;
 }
 
 obs_status run_upload_file_benchmark(WorkerArgs *args, char *key, char *out_req_id) {

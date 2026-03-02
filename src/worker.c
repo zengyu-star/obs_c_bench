@@ -14,7 +14,6 @@ void fill_pattern_buffer(char *buf, size_t size, int seed) {
     }
 }
 
-// 精准的 SDK 错误码到 HTTP 状态码映射函数
 static int infer_http_code(obs_status status) {
     switch (status) {
         case OBS_STATUS_AccessDenied:
@@ -65,7 +64,6 @@ void *worker_routine(void *arg) {
         return NULL;
     }
 
-    // 规划总请求数逻辑
     long long reqs_per_op = args->config->requests_per_thread > 0 ? args->config->requests_per_thread : 1;
     long long total_planned_requests = 0;
     
@@ -117,7 +115,6 @@ void *worker_routine(void *arg) {
             object_seq_id = current_loop_iteration * reqs_per_op + current_req_in_block;
         }
 
-        // [修改]: 扩容本地 key 缓冲区至支持 1024 字节
         char key[MAX_KEY_LEN]; 
         if (args->config->obj_name_pattern_hash) {
              unsigned int seed_val = (unsigned int)(args->thread_id + object_seq_id);
@@ -131,6 +128,12 @@ void *worker_routine(void *arg) {
         long long current_req_size = args->config->is_dynamic_size ? 
             (args->config->object_size_min + (rand_r(&thread_seed) % (args->config->object_size_max - args->config->object_size_min + 1))) : 
             args->config->object_size_max;
+
+        // [核心修改]: 若为多段上传，强制替换 current_req_size 为真实产生的数据量，保证带宽统计准确
+        if (current_case == TEST_CASE_MULTIPART) {
+            long long p_size = args->config->part_size > 0 ? args->config->part_size : (5 * 1024 * 1024);
+            current_req_size = (long long)args->config->parts_for_each_upload_id * p_size;
+        }
 
         long long prev_val_count = args->stats.fail_validation_count;
         struct timeval tv_abs;
@@ -186,7 +189,6 @@ void *worker_routine(void *arg) {
         if (detail_fp && batch_buffer) {
             batch_buffer[batch_count].timestamp_s = abs_timestamp;
             batch_buffer[batch_count].op_type = current_case;
-            // [修改]: 确保拷贝 key 时适配新的长度
             snprintf(batch_buffer[batch_count].key, sizeof(batch_buffer[batch_count].key), "%s", key);
             batch_buffer[batch_count].latency_ms = latency_ms;
             batch_buffer[batch_count].status_code = status;
@@ -217,7 +219,9 @@ void *worker_routine(void *arg) {
 
         if (status == OBS_STATUS_OK) {
             args->stats.success_count++;
-            if (current_case == TEST_CASE_PUT) args->stats.total_success_bytes += current_req_size;
+            if (current_case == TEST_CASE_PUT || current_case == TEST_CASE_MULTIPART) {
+                args->stats.total_success_bytes += current_req_size;
+            }
         } else {
             if (args->stats.fail_validation_count == prev_val_count) {
                 if (current_http_code == 403) args->stats.fail_403_count++;

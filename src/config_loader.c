@@ -72,13 +72,11 @@ int load_users_file(const char *filename, Config *cfg, int is_temp_mode) {
             token = strtok(NULL, ",");
             if(token) strcpy(cfg->user_list[count].security_token, trim_both(token)); 
             
-            // [新增]: 解析第5列 original_ak
             token = strtok(NULL, ",");
             if(token) strcpy(cfg->user_list[count].original_ak, trim_both(token)); 
             else memset(cfg->user_list[count].original_ak, 0, sizeof(cfg->user_list[count].original_ak));
         } else {
             memset(cfg->user_list[count].security_token, 0, sizeof(cfg->user_list[count].security_token));
-            // 普通模式下，原始 AK 即为当前 AK
             strcpy(cfg->user_list[count].original_ak, cfg->user_list[count].ak);
         }
 
@@ -101,6 +99,7 @@ int load_config(const char *filename, Config *cfg) {
     strcpy(cfg->protocol, "https");
     cfg->keep_alive = 1;
     cfg->part_size = 5 * 1024 * 1024;
+    cfg->parts_for_each_upload_id = 0; 
     cfg->log_level = LOG_INFO; 
     cfg->obj_name_pattern_hash = 0;
     cfg->enable_checkpoint = 1; 
@@ -152,8 +151,25 @@ int load_config(const char *filename, Config *cfg) {
         if (strcmp(key, "Endpoint") == 0) strcpy(cfg->endpoint, val);
         else if (strcmp(key, "Protocol") == 0) strcpy(cfg->protocol, val);
         else if (strcmp(key, "KeepAlive") == 0) cfg->keep_alive = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
-        else if (strcmp(key, "ConnectTimeoutSec") == 0) cfg->connect_timeout_sec = atoi(val);
-        else if (strcmp(key, "RequestTimeoutSec") == 0) cfg->request_timeout_sec = atoi(val);
+        // [新增校验]: 对连接超时的配置值进行合法性检查
+        else if (strcmp(key, "ConnectTimeoutSec") == 0) {
+            if (strlen(val) > 0) {
+                cfg->connect_timeout_sec = atoi(val);
+                if (cfg->connect_timeout_sec <= 0) {
+                    printf("[Config Error] 'ConnectTimeoutSec' must be > 0. Invalid value: %s\n", val);
+                    fclose(fp); return -1;
+                }
+            }
+        }
+        else if (strcmp(key, "RequestTimeoutSec") == 0) {
+            if (strlen(val) > 0) {
+                cfg->request_timeout_sec = atoi(val);
+                if (cfg->request_timeout_sec <= 0) {
+                    printf("[Config Error] 'RequestTimeoutSec' must be > 0. Invalid value: %s\n", val);
+                    fclose(fp); return -1;
+                }
+            }
+        }
         else if (strcmp(key, "LogLevel") == 0) cfg->log_level = log_level_from_string(val);
         else if (strcmp(key, "ObjNamePatternHash") == 0) cfg->obj_name_pattern_hash = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "EnableCheckpoint") == 0) cfg->enable_checkpoint = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
@@ -202,6 +218,15 @@ int load_config(const char *filename, Config *cfg) {
             }
         }
         else if (strcmp(key, "PartSize") == 0) cfg->part_size = atoll(val);
+        else if (strcmp(key, "PartsForEachUploadID") == 0) {
+            cfg->parts_for_each_upload_id = atoi(val);
+            if (cfg->parts_for_each_upload_id < 0) {
+                cfg->parts_for_each_upload_id = 0; 
+            } else if (cfg->parts_for_each_upload_id > 10000) {
+                printf("[WARN] PartsForEachUploadID (%d) exceeds OBS max limit. Capped to 10000.\n", cfg->parts_for_each_upload_id);
+                cfg->parts_for_each_upload_id = 10000;
+            }
+        }
         else if (strcmp(key, "KeyPrefix") == 0) strcpy(cfg->key_prefix, val);
         else if (strcmp(key, "MixOperation") == 0) cfg->mix_op_count = parse_mix_ops(val, cfg->mix_ops, MAX_MIX_OPS);
         else if (strcmp(key, "MixLoopCount") == 0) cfg->mix_loop_count = atoll(val);

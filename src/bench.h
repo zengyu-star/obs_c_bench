@@ -44,7 +44,7 @@ typedef struct {
     char ak[128];
     char sk[128];
     char security_token[4096]; 
-    char original_ak[128]; // [新增]: 专门存储永久 AK，仅用作桶名路由种子
+    char original_ak[128]; 
 } UserCredential;
 
 // 请求流水记录结构体
@@ -94,6 +94,7 @@ typedef struct {
     int range_count;
 
     long long part_size;
+    int parts_for_each_upload_id; // [新增]: 控制多段上传的固定段数
     char key_prefix[64];
     int run_seconds;
     
@@ -120,7 +121,7 @@ typedef struct {
     char client_sign_key_password[256];
     char client_enc_cert_path[256];
     char client_enc_key_path[256];
-    char ssl_cipher_list[512]; // [新增]: 密码套件列表
+    char ssl_cipher_list[512]; 
 
     // --- 数据校验与日志 ---
     int enable_data_validation;

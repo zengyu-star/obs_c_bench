@@ -244,12 +244,21 @@ int main(int argc, char **argv) {
     LOG_INFO("Task Output Dir: %s", cfg.task_log_dir);
 
     // ==========================================================
+    // [强校验拦截]: 如果是多段上传，必须显式配置 PartsForEachUploadID
+    // ==========================================================
+    if (cfg.test_case == TEST_CASE_MULTIPART) {
+        if (cfg.parts_for_each_upload_id <= 0) {
+            LOG_ERROR("FATAL: TestCase 216 (Multipart Upload) requires 'PartsForEachUploadID' to be explicitly set in config.dat (valid range: 1~10000).");
+            return 1;
+        }
+    }
+
+    // ==========================================================
     // [前置阶段]: 拦截生成凭证
     // ==========================================================
     if (cfg.is_temporary_token) {
         LOG_INFO("IsTemporaryToken enabled. Fetching STS tokens for %d users...", cfg.target_user_count);
 
-        // [核心优化]: 将 cfg.target_user_count 作为参数传递给 python 脚本
         char cmd[256];
         snprintf(cmd, sizeof(cmd), "python3 generate_temp_ak_sk.py %d", cfg.target_user_count);
 
