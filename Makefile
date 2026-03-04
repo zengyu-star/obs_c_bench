@@ -21,8 +21,6 @@ SRCS = src/main.c src/worker.c src/obs_adapter.c src/config_loader.c src/log.c
 ifdef MOCK_SDK_MODE
     CFLAGS += -DMOCK_SDK_MODE
     SRCS += src/mock_sdk.c
-    
-    # [修改] 追加文件名后缀
     TARGET := $(TARGET)_mock
     BUILD_TYPE_MSG += [Mock SDK Mode]
 else
@@ -35,11 +33,8 @@ endif
 # 2. 检测是否开启 ASan (AddressSanitizer)
 # 使用方法: make ENABLE_ASAN=1
 ifdef ENABLE_ASAN
-    # 增加 ASan 标志
     CFLAGS += -fsanitize=address -fno-omit-frame-pointer
-    LDFLAGS += -fsanitize=address
-    
-    # [修改] 追加文件名后缀
+    LDFLAGS := -fsanitize=address $(LDFLAGS)
     TARGET := $(TARGET)_asan
     BUILD_TYPE_MSG += [ASan Enabled]
 endif
