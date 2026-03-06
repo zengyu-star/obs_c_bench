@@ -17,6 +17,7 @@ bin/
 temptoken.dat
 test_data.bin
 users.dat
+users.dat_tmp_cred
 *.dat
 *.bin
 *.log
@@ -33,3 +34,6 @@ users.dat
 .idea/
 *.swp
 *.swo
+
+# 测试结果日志
+report.html
