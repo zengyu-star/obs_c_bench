@@ -1,0 +1,35 @@
+# 编译生成的文件
+*.o
+*.a
+*.so
+*.dll
+*.exe
+obs_c_bench
+
+# 目录
+lib/
+logs/
+build/
+dist/
+bin/
+
+# 数据文件
+temptoken.dat
+test_data.bin
+users.dat
+*.dat
+*.bin
+*.log
+
+# 临时文件
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# IDE配置文件
+.vscode/
+.idea/
+*.swp
+*.swo

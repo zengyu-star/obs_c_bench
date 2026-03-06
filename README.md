@@ -59,6 +59,12 @@ make
 # 编译 Mock 版 (仅用于联调逻辑，不发起真实网络请求)
 make mock
 
+# 编译 ASAN 版本 (用于检测内存错误)
+make asan
+
+# 编译 Mock + ASAN 版本 (用于联调逻辑，不发起真实网络请求)
+make mock_asan
+
 ```
 
 编译成功后，将在根目录生成可执行文件 `obs_c_bench`（或 `obs_c_bench_mock`）。
