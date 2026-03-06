@@ -28,6 +28,7 @@ users.dat_tmp_cred
 *.swp
 *.swo
 *~
+__pycache__/
 
 # IDE配置文件
 .vscode/
