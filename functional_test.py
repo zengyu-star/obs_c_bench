@@ -187,6 +187,17 @@ class TestDataConsistency:
         assert ret == 0
         check_obs_output(out, expect_success=True)
 
+    def test_get_202_validation_fail_format(self):
+        update_config("EnableDataValidation", "false")
+        update_config("ObjectSize", "1048576")
+        ret, out = run_cmd(f"{BINARY} 201")
+        assert ret == 0
+        check_obs_output(out, expect_success=True)
+
+        update_config("EnableDataValidation", "true")
+        ret, out = run_cmd(f"{BINARY} 202")
+        check_obs_output(out, expect_success=False)
+
 
 class TestMixedOperations:
     def test_case_900_mixed_ops(self):
