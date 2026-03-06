@@ -58,6 +58,7 @@ $(TARGET): $(OBJS)
 	@echo "Build Complete: $(TARGET)"
 	@echo "Mode Info: $(BUILD_TYPE_MSG)"
 	@echo "----------------------------------------"
+	@rm -f $(OBJS)
 
 # 编译 .c 到 .o
 %.o: %.c
