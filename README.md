@@ -69,6 +69,20 @@ make mock_asan
 
 编译成功后，将在根目录生成可执行文件 `obs_c_bench`（或 `obs_c_bench_mock`）。
 
+### 自动化 SDK 更新
+
+如果需要下载、编译最新的华为云 OBS C SDK 并重新编译本工具，可以使用配套的自动化脚本：
+
+```bash
+python3 update_sdk.py
+```
+
+该脚本将自动执行以下操作：
+1. **架构检测**：自动识别系统架构 (x86_64 / aarch64)。
+2. **SDK 下载**：从华为云官网/仓库获取最新的 SDK 源码（支持预判本地 `master.zip`）。
+3. **静默编译**：自动执行 SDK 的编译脚本并替换本地库文件。
+4. **全量重编**：自动执行 `make clean && make all` 完成工具的一键更新。
+
 ---
 
 ## 🚀 快速开始 (Quick Start)
