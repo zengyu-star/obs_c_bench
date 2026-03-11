@@ -12,6 +12,7 @@ logs/
 build/
 dist/
 bin/
+huaweicloud-sdk-c-obs-master/
 
 # 数据文件
 temptoken.dat
@@ -38,3 +39,6 @@ __pycache__/
 
 # 测试结果日志
 report.html
+
+# sdk源码包
+master.zip
