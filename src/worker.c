@@ -219,9 +219,6 @@ void *worker_routine(void *arg) {
 
         if (status == OBS_STATUS_OK) {
             args->stats.success_count++;
-            if (current_case == TEST_CASE_PUT || current_case == TEST_CASE_MULTIPART) {
-                args->stats.total_success_bytes += current_req_size;
-            }
         } else {
             if (args->stats.fail_validation_count == prev_val_count) {
                 if (current_http_code == 403) args->stats.fail_403_count++;

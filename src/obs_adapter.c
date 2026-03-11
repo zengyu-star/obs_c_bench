@@ -1,4 +1,5 @@
 #include "bench.h"
+#include <limits.h>
 #include <strings.h> 
 #include <libgen.h>  
 #include <string.h> 
@@ -17,6 +18,7 @@ typedef struct {
     int skip_validation;            
     
     char request_id[64];
+    uint64_t last_reported_bytes; 
 } transfer_context;
 
 obs_status response_properties_callback(const obs_response_properties *properties, void *callback_data) {
@@ -62,6 +64,10 @@ int put_buffer_callback_optimized(int buffer_size, char *buffer, void *callback_
         int to_copy = (buffer_size - bytes_copied < available) ? 
                       (buffer_size - bytes_copied) : available;
         memcpy(buffer + bytes_copied, args->pattern_buffer + offset, to_copy);
+        
+        // 实时累加成功处理的字节数，确保即便大请求未结束也能看到带宽
+        args->stats.total_success_bytes += to_copy;
+
         bytes_copied += to_copy;
         ctx->total_processed += to_copy;
         offset = ctx->total_processed & args->pattern_mask; 
@@ -77,6 +83,7 @@ obs_status get_buffer_callback_optimized(int buffer_size, const char *buffer, vo
 
     if (!args->config->enable_data_validation || ctx->skip_validation) {
         ctx->total_processed += buffer_size;
+        args->stats.total_success_bytes += buffer_size; // 实时累加
         return OBS_STATUS_OK;
     }
     
@@ -101,12 +108,29 @@ obs_status get_buffer_callback_optimized(int buffer_size, const char *buffer, vo
              return OBS_STATUS_InternalError; 
         }
         
+        // 验证成功后实时累加
+        args->stats.total_success_bytes += to_check;
+
         bytes_checked += to_check;
         ctx->total_processed += to_check;
         absolute_pos += to_check;
         offset = absolute_pos & args->pattern_mask;
     }
     return OBS_STATUS_OK;
+}
+
+// ----------------------------------------------------------------------------
+// 断点续传进度回调：用于实时统计带宽
+// ----------------------------------------------------------------------------
+void resumable_progress_callback(double progress, uint64_t uploadedSize, uint64_t fileTotalSize, void *callback_data) {
+    transfer_context *ctx = (transfer_context *)callback_data;
+    if (ctx && ctx->args) {
+        if (uploadedSize > ctx->last_reported_bytes) {
+            uint64_t increment = uploadedSize - ctx->last_reported_bytes;
+            ctx->args->stats.total_success_bytes += increment;
+            ctx->last_reported_bytes = uploadedSize;
+        }
+    }
 }
 
 obs_status complete_multipart_upload_callback(const char *location, const char *bucket,
@@ -129,6 +153,19 @@ void upload_file_complete_callback(obs_status status, char *result_message, int 
         ctx->ret_status = status;
         if (status != OBS_STATUS_OK && result_message) {
              snprintf(ctx->error_msg, sizeof(ctx->error_msg), "%s", result_message);
+        }
+        
+        // 增加详尽的分段上传日志，仅在有分段信息时打印
+        if (part_count_return > 0 && (ctx->args->config->enable_detail_log || status != OBS_STATUS_OK)) {
+            printf("\n--- Resumable Upload Part Details (Total: %d) ---\n", part_count_return);
+            for (int i = 0; i < part_count_return; i++) {
+                printf("Part %d: StartByte=%llu, Size=%llu, Status=%s\n", 
+                       upload_info_list[i].part_num,
+                       (unsigned long long)upload_info_list[i].start_byte,
+                       (unsigned long long)upload_info_list[i].part_size,
+                       obs_get_status_name(upload_info_list[i].status_return));
+            }
+            printf("--------------------------------------------------\n");
         }
     }
 }
@@ -423,15 +460,34 @@ obs_status run_upload_file_benchmark(WorkerArgs *args, char *key, char *out_req_
     transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0, {0}};
     obs_put_properties put_props;
     init_put_properties(&put_props);
-    int pause_flag = 0;
+    char cp_file[PATH_MAX + 256] = {0};
+    char abs_path[PATH_MAX] = {0};
     obs_upload_file_configuration upload_conf = {0};
     upload_conf.upload_file = args->config->upload_file_path; 
     upload_conf.part_size = args->config->part_size;
-    upload_conf.check_point_file = NULL; 
-    upload_conf.enable_check_point = 0; 
-    upload_conf.task_num = 1; 
+    
+    if (args->config->enable_checkpoint) {
+        if (realpath("upload_checkpoint", abs_path)) {
+             // 为每个 Key 生成唯一的 .cp 文件，避免同一线程并发/先后操作不同 Key 时冲突
+             unsigned int key_hash = 0;
+             for (char *p = key; *p; p++) key_hash = key_hash * 31 + *p;
+             snprintf(cp_file, sizeof(cp_file), "%s/%s_%u.cp", abs_path, args->username, key_hash);
+             upload_conf.check_point_file = cp_file;
+             upload_conf.enable_check_point = 1;
+        } else {
+             // Fallback to relative if realpath fails
+             snprintf(cp_file, sizeof(cp_file), "upload_checkpoint/bench_thread_%d.cp", args->thread_id);
+             upload_conf.check_point_file = cp_file;
+             upload_conf.enable_check_point = 1;
+        }
+    } else {
+        upload_conf.check_point_file = NULL;
+        upload_conf.enable_check_point = 0;
+    }
+    
+    upload_conf.task_num = args->config->resumable_task_num > 0 ? args->config->resumable_task_num : 1; 
     upload_conf.put_properties = &put_props;
-    upload_conf.pause_upload_flag = &pause_flag; 
+    upload_conf.pause_upload_flag = (int *)&g_graceful_stop; 
 
     obs_upload_file_server_callback server_cb; 
     memset(&server_cb, 0, sizeof(server_cb));
@@ -441,6 +497,7 @@ obs_status run_upload_file_benchmark(WorkerArgs *args, char *key, char *out_req_
     handler.response_handler.properties_callback = &response_properties_callback;
     handler.response_handler.complete_callback = &response_complete_callback;
     handler.upload_file_callback = &upload_file_complete_callback;
+    handler.progress_callback = &resumable_progress_callback;
 
     upload_file(&option, key, NULL, &upload_conf, server_cb, &handler, &ctx);
     

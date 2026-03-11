@@ -62,6 +62,7 @@ void save_benchmark_report(Config *cfg, long long total,
     fprintf(fp, "---------------- Configuration ----------------\n");
     fprintf(fp, "[Environment]\n");
     fprintf(fp, "  Endpoint:          %s\n", cfg->endpoint);
+    fprintf(fp, "  LogLevel:          %s\n", log_level_to_string(cfg->log_level));
     fprintf(fp, "  Bucket(Fixed):     %s\n", cfg->bucket_name_fixed[0] ? cfg->bucket_name_fixed : "N/A");
     fprintf(fp, "  Bucket(Prefix):    %s\n", cfg->bucket_name_prefix[0] ? cfg->bucket_name_prefix : "N/A");
     fprintf(fp, "  STS Auth Mode:     %s\n", cfg->is_temporary_token ? "true" : "false");
@@ -71,6 +72,11 @@ void save_benchmark_report(Config *cfg, long long total,
     fprintf(fp, "  KeepAlive:         %s\n", cfg->keep_alive ? "true" : "false");
     fprintf(fp, "  ConnectTimeout:    %d sec\n", cfg->connect_timeout_sec);
     fprintf(fp, "  RequestTimeout:    %d sec\n", cfg->request_timeout_sec);
+    fprintf(fp, "  GM Mode Switch:    %s\n", cfg->gm_mode_switch ? "true" : "false");
+    fprintf(fp, "  Mutual SSL:        %s\n", cfg->mutual_ssl_switch ? "true" : "false");
+    if (cfg->ssl_cipher_list[0]) {
+        fprintf(fp, "  SSL Cipher List:   %s\n", cfg->ssl_cipher_list);
+    }
     
     fprintf(fp, "[TestPlan]\n");
     fprintf(fp, "  Total Threads:     %d (%d Users x %d Threads/User)\n", 
@@ -82,7 +88,34 @@ void save_benchmark_report(Config *cfg, long long total,
     } else {
         fprintf(fp, "  TestMode:          Standard TestCase (%d)\n", cfg->test_case);
     }
-    fprintf(fp, "  ReqsPerOp/Thread:  %d\n", cfg->requests_per_thread);
+    fprintf(fp, "  Reqs/Thread:       %d\n", cfg->requests_per_thread);
+
+    fprintf(fp, "[ObjectSettings]\n");
+    if (cfg->is_dynamic_size) {
+        fprintf(fp, "  ObjectSize:        %lld ~ %lld bytes (Dynamic)\n", cfg->object_size_min, cfg->object_size_max);
+    } else {
+        fprintf(fp, "  ObjectSize:        %lld bytes\n", cfg->object_size_max);
+    }
+    fprintf(fp, "  PartSize:          %lld bytes\n", cfg->part_size);
+    fprintf(fp, "  Parts/Upload:      %d\n", cfg->parts_for_each_upload_id);
+    fprintf(fp, "  KeyPrefix:         %s\n", cfg->key_prefix);
+    fprintf(fp, "  KeyHashPrefix:     %s\n", cfg->obj_name_pattern_hash ? "true" : "false");
+
+    fprintf(fp, "[Resumable & Validation]\n");
+    fprintf(fp, "  EnableCheckpoint:  %s\n", cfg->enable_checkpoint ? "true" : "false");
+    fprintf(fp, "  ResumableTaskNum:  %d\n", cfg->resumable_task_num);
+    fprintf(fp, "  UploadFilePath:    %s\n", cfg->upload_file_path[0] ? cfg->upload_file_path : "N/A");
+    fprintf(fp, "  DataValidation:    %s\n", cfg->enable_data_validation ? "true" : "false");
+
+    fprintf(fp, "[Logging]\n");
+    fprintf(fp, "  DetailLog:         %s\n", cfg->enable_detail_log ? "true" : "false");
+
+    if (cfg->gm_mode_switch || cfg->mutual_ssl_switch) {
+        fprintf(fp, "[SecurityPaths]\n");
+        if (cfg->server_cert_path[0]) fprintf(fp, "  ServerCert:        %s\n", cfg->server_cert_path);
+        if (cfg->client_sign_cert_path[0]) fprintf(fp, "  ClientSignCert:    %s\n", cfg->client_sign_cert_path);
+        if (cfg->client_enc_cert_path[0]) fprintf(fp, "  ClientEncCert:     %s\n", cfg->client_enc_cert_path);
+    }
 
     fprintf(fp, "---------------- Statistics -------------------\n");
     fprintf(fp, "Total Requests:      %lld\n", total);
@@ -208,6 +241,9 @@ int main(int argc, char **argv) {
 
     struct stat st = {0};
     if (stat("logs", &st) == -1) mkdir("logs", 0755);
+    if (stat("upload_checkpoint", &st) == -1) mkdir("upload_checkpoint", 0755);
+    
+    initialize_break_point_lock();
     
     time_t now = time(NULL);
     struct tm t_res;
@@ -419,6 +455,7 @@ int main(int argc, char **argv) {
     }
 
     obs_deinitialize();
+    deinitialize_break_point_lock();
     return 0;
 }
 

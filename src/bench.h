@@ -126,6 +126,7 @@ typedef struct {
     // --- 数据校验与日志 ---
     int enable_data_validation;
     int enable_detail_log;      
+    int resumable_task_num;     
     char task_log_dir[256];     
 
 } Config;

@@ -114,6 +114,7 @@ int load_config(const char *filename, Config *cfg) {
     cfg->bucket_name_fixed[0] = '\0';
     cfg->bucket_name_prefix[0] = '\0';
     cfg->is_temporary_token = 0;  
+    cfg->resumable_task_num = 5; 
     
     // 初始化安全认证路径
     cfg->gm_mode_switch = 0;
@@ -247,6 +248,7 @@ int load_config(const char *filename, Config *cfg) {
 
         else if (strcmp(key, "EnableDataValidation") == 0) cfg->enable_data_validation = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "EnableDetailLog") == 0) cfg->enable_detail_log = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
+        else if (strcmp(key, "ResumableTaskNum") == 0) cfg->resumable_task_num = atoi(val);
     }
     
     if (cfg->part_size <= 0) cfg->part_size = 5 * 1024 * 1024; 
