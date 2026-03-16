@@ -117,15 +117,13 @@ int load_config(const char *filename, Config *cfg) {
     cfg->resumable_task_num = 5; 
     
     // 初始化安全认证路径
-    cfg->gm_mode_switch = 0;
-    cfg->mutual_ssl_switch = 0;
+    cfg->gm_auth_mode[0] = '\0';
     cfg->server_cert_path[0] = '\0';
     cfg->client_sign_cert_path[0] = '\0';
     cfg->client_sign_key_path[0] = '\0';
     cfg->client_sign_key_password[0] = '\0';
     cfg->client_enc_cert_path[0] = '\0';
     cfg->client_enc_key_path[0] = '\0';
-    cfg->ssl_cipher_list[0] = '\0';
     
     cfg->enable_data_validation = 0;
     cfg->enable_detail_log = 0;
@@ -236,15 +234,13 @@ int load_config(const char *filename, Config *cfg) {
         // ------------------
         // 安全配置映射
         // ------------------
-        else if (strcmp(key, "GmModeSwitch") == 0) cfg->gm_mode_switch = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
-        else if (strcmp(key, "MutualSslSwitch") == 0) cfg->mutual_ssl_switch = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
+        else if (strcmp(key, "GmAuthMode") == 0) strcpy(cfg->gm_auth_mode, val);
         else if (strcmp(key, "ServerCertPath") == 0) strcpy(cfg->server_cert_path, val);
         else if (strcmp(key, "ClientSignCertPath") == 0) strcpy(cfg->client_sign_cert_path, val);
         else if (strcmp(key, "ClientSignKeyPath") == 0) strcpy(cfg->client_sign_key_path, val);
         else if (strcmp(key, "ClientSignKeyPassword") == 0) strcpy(cfg->client_sign_key_password, val);
         else if (strcmp(key, "ClientEncCertPath") == 0) strcpy(cfg->client_enc_cert_path, val);
         else if (strcmp(key, "ClientEncKeyPath") == 0) strcpy(cfg->client_enc_key_path, val);
-        else if (strcmp(key, "SslCipherList") == 0) strcpy(cfg->ssl_cipher_list, val);
 
         else if (strcmp(key, "EnableDataValidation") == 0) cfg->enable_data_validation = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "EnableDetailLog") == 0) cfg->enable_detail_log = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
@@ -266,24 +262,35 @@ int load_config(const char *filename, Config *cfg) {
     // -----------------------------------------------------------
     // 国密及双向认证严格校验
     // -----------------------------------------------------------
-    if (cfg->mutual_ssl_switch || cfg->gm_mode_switch) {
+    if (strlen(cfg->gm_auth_mode) > 0) {
         if (strcasecmp(cfg->protocol, "https") != 0) {
-            printf("[Config Error] Protocol MUST be 'https' when MutualSslSwitch or GmModeSwitch is enabled.\n");
+            printf("[Config Error] Protocol MUST be 'https' when GmAuthMode is configured.\n");
             fclose(fp); return -1;
         }
-    }
 
-    if (cfg->mutual_ssl_switch) {
-        if (strlen(cfg->server_cert_path) == 0 || strlen(cfg->client_sign_cert_path) == 0 || strlen(cfg->client_sign_key_path) == 0) {
-            printf("[Config Error] ServerCertPath, ClientSignCertPath, and ClientSignKeyPath MUST be configured when MutualSslSwitch is true.\n");
-            fclose(fp); return -1;
-        }
-    }
-
-    if (cfg->gm_mode_switch) {
-        if (strlen(cfg->server_cert_path) == 0 || strlen(cfg->client_enc_cert_path) == 0 || strlen(cfg->client_enc_key_path) == 0) {
-            printf("[Config Error] ServerCertPath, ClientEncCertPath, and ClientEncKeyPath MUST be configured when GmModeSwitch is true.\n");
-            fclose(fp); return -1;
+        if (strcmp(cfg->gm_auth_mode, "GM_Mutual") == 0) {
+            if (strlen(cfg->server_cert_path) == 0 || strlen(cfg->client_sign_cert_path) == 0 || 
+                strlen(cfg->client_sign_key_path) == 0 || strlen(cfg->client_enc_cert_path) == 0 || 
+                strlen(cfg->client_enc_key_path) == 0) {
+                printf("[Config Error] Required certificates/keys missing for GM_Mutual.\n");
+                fclose(fp); return -1;
+            }
+        } else if (strcmp(cfg->gm_auth_mode, "GM_Oneway") == 0) {
+            if (strlen(cfg->server_cert_path) == 0) {
+                printf("[Config Error] ServerCertPath missing for GM_Oneway.\n");
+                fclose(fp); return -1;
+            }
+        } else if (strcmp(cfg->gm_auth_mode, "Inter_Mutual") == 0) {
+            if (strlen(cfg->server_cert_path) == 0 || strlen(cfg->client_sign_cert_path) == 0 || 
+                strlen(cfg->client_sign_key_path) == 0) {
+                printf("[Config Error] Required certificates/keys missing for Inter_Mutual.\n");
+                fclose(fp); return -1;
+            }
+        } else if (strcmp(cfg->gm_auth_mode, "Inter_Oneway") == 0) {
+            if (strlen(cfg->server_cert_path) == 0) {
+                printf("[Config Error] ServerCertPath missing for Inter_Oneway.\n");
+                fclose(fp); return -1;
+            }
         }
     }
 

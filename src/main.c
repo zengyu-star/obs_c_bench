@@ -72,11 +72,7 @@ void save_benchmark_report(Config *cfg, long long total,
     fprintf(fp, "  KeepAlive:         %s\n", cfg->keep_alive ? "true" : "false");
     fprintf(fp, "  ConnectTimeout:    %d sec\n", cfg->connect_timeout_sec);
     fprintf(fp, "  RequestTimeout:    %d sec\n", cfg->request_timeout_sec);
-    fprintf(fp, "  GM Mode Switch:    %s\n", cfg->gm_mode_switch ? "true" : "false");
-    fprintf(fp, "  Mutual SSL:        %s\n", cfg->mutual_ssl_switch ? "true" : "false");
-    if (cfg->ssl_cipher_list[0]) {
-        fprintf(fp, "  SSL Cipher List:   %s\n", cfg->ssl_cipher_list);
-    }
+    fprintf(fp, "  Gm Auth Mode:      %s\n", cfg->gm_auth_mode[0] ? cfg->gm_auth_mode : "Default");
     
     fprintf(fp, "[TestPlan]\n");
     fprintf(fp, "  Total Threads:     %d (%d Users x %d Threads/User)\n", 
@@ -110,11 +106,13 @@ void save_benchmark_report(Config *cfg, long long total,
     fprintf(fp, "[Logging]\n");
     fprintf(fp, "  DetailLog:         %s\n", cfg->enable_detail_log ? "true" : "false");
 
-    if (cfg->gm_mode_switch || cfg->mutual_ssl_switch) {
+    if (strlen(cfg->gm_auth_mode) > 0) {
         fprintf(fp, "[SecurityPaths]\n");
         if (cfg->server_cert_path[0]) fprintf(fp, "  ServerCert:        %s\n", cfg->server_cert_path);
         if (cfg->client_sign_cert_path[0]) fprintf(fp, "  ClientSignCert:    %s\n", cfg->client_sign_cert_path);
+        if (cfg->client_sign_key_path[0]) fprintf(fp, "  ClientSignKey:     %s\n", cfg->client_sign_key_path);
         if (cfg->client_enc_cert_path[0]) fprintf(fp, "  ClientEncCert:     %s\n", cfg->client_enc_cert_path);
+        if (cfg->client_enc_key_path[0]) fprintf(fp, "  ClientEncKey:      %s\n", cfg->client_enc_key_path);
     }
 
     fprintf(fp, "---------------- Statistics -------------------\n");

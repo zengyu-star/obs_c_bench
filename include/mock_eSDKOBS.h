@@ -173,13 +173,27 @@ typedef enum
 	 OBS_STATUS_AccessLabelNotFound,
 	OBS_STATUS_NULL_HOSTNAME, 
 	OBS_STATUS_NULL_SECRETE_ACCESS_KEY,
-	OBS_STATUS_NoSuchTrashConfiguration,
 	OBS_STATUS_InvalidRequestBody,
     OBS_STATUS_BUTT
 } obs_status;
 
+typedef enum
+{
+    UPLOAD_NOTSTART,
+    UPLOADING,
+    UPLOAD_FAILED,
+    UPLOAD_SUCCESS,
+    STATUS_BUTT
+}part_upload_status;
+
+typedef enum
+{
+    OBS_SSL_VERIFYPEER_CLOSE = 0,
+    OBS_SSL_VERIFYPEER_OPEN = 1
+} obs_ssl_verifypeer_mode;
+
 typedef enum { OBS_GM_MODE_CLOSE = 0, OBS_GM_MODE_OPEN = 1 } obs_gm_mode_switch;
-typedef enum { OBS_MUTUAL_SSL_CLOSE = 0, OBS_MUTUAL_SSL_OPEN = 1 } obs_mutual_ssl_switch;
+typedef enum { OBS_CLIENT_AUTH_CLOSE = 0, OBS_CLIENT_AUTH_OPEN = 1 } obs_client_auth_switch;
 typedef enum { OBS_URI_STYLE_VIRTUALHOST = 0, OBS_URI_STYLE_PATH = 1 } obs_uri_style;
 
 typedef struct {
@@ -195,6 +209,8 @@ typedef struct {
     obs_protocol protocol;
 } obs_bucket_context;
 
+typedef int (*obs_password_cb_t)(void *context, char *buf, int buf_len);
+
 typedef struct {
     int connect_time;
     int max_connected_time;
@@ -202,15 +218,18 @@ typedef struct {
     
     // --- 同步真实 SDK 最新国密与双向认证字段 ---
     char* server_cert_path;
-    obs_mutual_ssl_switch mutual_ssl_switch;
+    obs_client_auth_switch client_auth_switch; 
     char *client_sign_cert_path;
     char *client_sign_key_path;
-    char *client_sign_key_password;
+    void *password_callback_context;
+    obs_password_cb_t password_callback;
     
     obs_gm_mode_switch gm_mode_switch;
     char *client_enc_cert_path;
     char *client_enc_key_path;
     
+    obs_ssl_verifypeer_mode ssl_verify_peer;
+    int ssl_version; 
     char *ssl_cipher_list; // [新增]: 密码套件列表
 
 } obs_http_request_option;
@@ -252,6 +271,9 @@ typedef struct {
 
 typedef struct {
     int part_num;
+    uint64_t start_byte;
+    uint64_t part_size;
+    part_upload_status status_return;
 } obs_upload_file_part_info;
 
 typedef struct {
@@ -281,6 +303,7 @@ typedef obs_status (obs_response_properties_callback)(const obs_response_propert
 typedef void (obs_response_complete_callback)(obs_status status, const obs_error_details *error, void *callback_data);
 typedef int (obs_put_object_data_callback)(int buffer_size, char *buffer, void *callback_data);
 typedef obs_status (obs_get_object_data_callback)(int buffer_size, const char *buffer, void *callback_data);
+typedef void (obs_progress_callback)(double progress, uint64_t uploadedSize, uint64_t fileTotalSize, void *callback_data);
 typedef void (obs_upload_file_callback)(obs_status status, char *result_message, int part_count_return, obs_upload_file_part_info * upload_info_list, void *callback_data);
 typedef int (obs_upload_data_callback)(int buffer_size, char *buffer, void *callback_data);
 typedef obs_status (obs_complete_multi_part_upload_callback)(const char *location, const char *bucket, const char *key, const char* etag, void *callback_data);
@@ -307,6 +330,7 @@ typedef struct {
 typedef struct {
     obs_response_handler response_handler;
     obs_upload_file_callback *upload_file_callback;
+    obs_progress_callback *progress_callback;
 } obs_upload_file_response_handler;
 
 typedef struct {

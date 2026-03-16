@@ -111,17 +111,15 @@ typedef struct {
     long long mix_loop_count;  
     int use_mix_mode;          
 
-    // --- 安全与临时凭证 ---
+    // --- 安全与认证 ---
     int is_temporary_token;     
-    int gm_mode_switch;
-    int mutual_ssl_switch;
+    char gm_auth_mode[32]; 
     char server_cert_path[256];
     char client_sign_cert_path[256];
     char client_sign_key_path[256];
     char client_sign_key_password[256];
     char client_enc_cert_path[256];
     char client_enc_key_path[256];
-    char ssl_cipher_list[512]; 
 
     // --- 数据校验与日志 ---
     int enable_data_validation;

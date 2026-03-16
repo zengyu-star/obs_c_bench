@@ -66,28 +66,28 @@ UploadFilePath=./test_data.bin
 EnableCheckpoint=true
 
 # --------------------------------------------------------------
-# 6. 安全与加密 (Security & Guomi TLS)
+# 6. 安全与认证模式 (Security & Auth Mode)
 # --------------------------------------------------------------
-# 是否开启国密模式 (true/false)
-GmModeSwitch=false
-# 是否开启双向认证 (true/false)
-MutualSslSwitch=false
+# GmAuthMode: 国密/国际 认证模式
+# - GM_Mutual: 国密双向认证
+# - GM_Oneway: 国密单向认证
+# - Inter_Mutual: 国际双向认证
+# - Inter_Oneway: 国际单向认证
+# - (留空): 默认模式 (国际单向或由 SDK 内部逻辑决定)
+GmAuthMode=
 
-# 服务端证书路径 (MutualSslSwitch 或 GmModeSwitch 为 true 时必填)
+# 服务端证书路径 (GmAuthMode 不为空时必填)
 ServerCertPath=
 
-# 客户端签名证书和私钥 (MutualSslSwitch 为 true 时必填)
+# 客户端签名证书和私钥 (Mutual 模式时必填)
 ClientSignCertPath=
 ClientSignKeyPath=
 # 客户端签名私钥密码 (选填)
 ClientSignKeyPassword=
 
-# 客户端加密证书和私钥 (GmModeSwitch 为 true 时必填)
+# 客户端加密证书和私钥 (GM_Mutual 模式时必填)
 ClientEncCertPath=
 ClientEncKeyPath=
-
-# TLS/国密 密码套件列表 (选填，例如：ECDHE-RSA-AES128-GCM-SHA256 或 ECC-SM4-SM3)
-SslCipherList=
 
 # --------------------------------------------------------------
 # 7. 监控与日志记录 (Logging & Monitor)

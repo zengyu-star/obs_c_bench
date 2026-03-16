@@ -170,6 +170,17 @@ void upload_file_complete_callback(obs_status status, char *result_message, int 
     }
 }
 
+static int client_sign_password_callback(void *context, char *buf, int buf_len) {
+    char *password = (char *)context;
+    if (!password || !buf) return 0;
+    int len = (int)strlen(password);
+    if (len >= buf_len) {
+        return 0;
+    }
+    strcpy(buf, password);
+    return len;
+}
+
 static void setup_options(obs_options *option, WorkerArgs *args) {
     memset(option, 0, sizeof(obs_options));
     init_obs_options(option);
@@ -178,12 +189,6 @@ static void setup_options(obs_options *option, WorkerArgs *args) {
     option->bucket_options.bucket_name = args->effective_bucket;
     option->bucket_options.access_key = args->effective_ak;
     option->bucket_options.secret_access_key = args->effective_sk;
-    
-    if (args->config->mutual_ssl_switch) {
-        option->bucket_options.useCname = true;
-    } else {
-        option->bucket_options.useCname = false;
-    }
 
     if (args->config->is_temporary_token && strlen(args->effective_token) > 0) {
         option->bucket_options.token = args->effective_token;
@@ -191,34 +196,51 @@ static void setup_options(obs_options *option, WorkerArgs *args) {
 
     option->bucket_options.protocol = (strcasecmp(args->config->protocol, "http") == 0) ? OBS_PROTOCOL_HTTP : OBS_PROTOCOL_HTTPS;
     
-    // [修复]: 将秒转换为 SDK 要求的毫秒值
     option->request_options.connect_time = args->config->connect_timeout_sec * 1000;
     option->request_options.max_connected_time = args->config->request_timeout_sec * 1000;
     option->request_options.keep_alive = (args->config->keep_alive != 0);
 
-    option->request_options.gm_mode_switch = args->config->gm_mode_switch ? OBS_GM_MODE_OPEN : OBS_GM_MODE_CLOSE;
-    option->request_options.mutual_ssl_switch = args->config->mutual_ssl_switch ? OBS_MUTUAL_SSL_OPEN : OBS_MUTUAL_SSL_CLOSE;
+    // Default values
+    option->bucket_options.useCname = false;
+    option->bucket_options.uri_style = OBS_URI_STYLE_VIRTUALHOST;
 
-    if (strlen(args->config->server_cert_path) > 0) {
+    if (strlen(args->config->gm_auth_mode) > 0) {
+        option->bucket_options.useCname = true;
+        option->bucket_options.uri_style = OBS_URI_STYLE_PATH;
+        option->request_options.ssl_verify_peer = OBS_SSL_VERIFYPEER_OPEN;
         option->request_options.server_cert_path = args->config->server_cert_path;
-    }
 
-    if (args->config->mutual_ssl_switch) {
-        option->request_options.client_sign_cert_path = args->config->client_sign_cert_path;
-        option->request_options.client_sign_key_path = args->config->client_sign_key_path;
-        
-        if (strlen(args->config->client_sign_key_password) > 0) {
-            option->request_options.client_sign_key_password = args->config->client_sign_key_password;
+        if (strcmp(args->config->gm_auth_mode, "GM_Mutual") == 0) {
+            option->request_options.client_auth_switch = OBS_CLIENT_AUTH_OPEN;
+            option->request_options.gm_mode_switch = OBS_GM_MODE_OPEN;
+            option->request_options.client_sign_cert_path = args->config->client_sign_cert_path;
+            option->request_options.client_sign_key_path = args->config->client_sign_key_path;
+            option->request_options.client_enc_cert_path = args->config->client_enc_cert_path;
+            option->request_options.client_enc_key_path = args->config->client_enc_key_path;
+            option->request_options.ssl_version = 8;
+        } else if (strcmp(args->config->gm_auth_mode, "GM_Oneway") == 0) {
+            option->request_options.client_auth_switch = OBS_CLIENT_AUTH_CLOSE;
+            option->request_options.gm_mode_switch = OBS_GM_MODE_OPEN;
+            option->request_options.ssl_version = 8;
+        } else if (strcmp(args->config->gm_auth_mode, "Inter_Mutual") == 0) {
+            option->request_options.client_auth_switch = OBS_CLIENT_AUTH_OPEN;
+            option->request_options.gm_mode_switch = OBS_GM_MODE_CLOSE;
+            option->request_options.client_sign_cert_path = args->config->client_sign_cert_path;
+            option->request_options.client_sign_key_path = args->config->client_sign_key_path;
+        } else if (strcmp(args->config->gm_auth_mode, "Inter_Oneway") == 0) {
+            option->request_options.client_auth_switch = OBS_CLIENT_AUTH_CLOSE;
+            option->request_options.gm_mode_switch = OBS_GM_MODE_CLOSE;
         }
-    }
 
-    if (args->config->gm_mode_switch) {
-        option->request_options.client_enc_cert_path = args->config->client_enc_cert_path;
-        option->request_options.client_enc_key_path = args->config->client_enc_key_path;
-    }
-
-    if (strlen(args->config->ssl_cipher_list) > 0) {
-        option->request_options.ssl_cipher_list = args->config->ssl_cipher_list;
+        if (strlen(args->config->client_sign_key_password) > 0) {
+            option->request_options.password_callback = client_sign_password_callback;
+            option->request_options.password_callback_context = args->config->client_sign_key_password;
+        }
+    } else {
+        // Fallback for non-mode based SSL settings if needed
+        if (strlen(args->config->server_cert_path) > 0) {
+            option->request_options.server_cert_path = args->config->server_cert_path;
+        }
     }
 }
 
