@@ -1,7 +1,11 @@
 import sys
 import requests
+import urllib3
 import json
 from datetime import datetime
+
+# 屏蔽关闭 SSL 校验后产生的 InsecureRequestWarning 告警
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Huawei Cloud IAM Configuration
 IAM_BASE_URL = "https://iam.myhuaweicloud.com"
@@ -32,8 +36,8 @@ def get_temporary_credentials(user_id, user_name, password):
     }
 
     try:
-        # Step 1: Authentication
-        resp = requests.post(f"{IAM_BASE_URL}{TOKEN_PATH}", json=auth_payload, headers=headers, timeout=10)
+        # Step 1: Authentication (已添加 verify=False)
+        resp = requests.post(f"{IAM_BASE_URL}{TOKEN_PATH}", json=auth_payload, headers=headers, timeout=10, verify=False)
         if resp.status_code != 201:
             return None, f"AUTH_ERR_{resp.status_code}"
         
@@ -51,7 +55,8 @@ def get_temporary_credentials(user_id, user_name, password):
             }
         }
         
-        resp_sts = requests.post(f"{IAM_BASE_URL}{STS_PATH}", json=sts_payload, headers=sts_headers, timeout=10)
+        # (已添加 verify=False)
+        resp_sts = requests.post(f"{IAM_BASE_URL}{STS_PATH}", json=sts_payload, headers=sts_headers, timeout=10, verify=False)
         if resp_sts.status_code != 201:
             return None, f"STS_ERR_{resp_sts.status_code}"
             
@@ -141,4 +146,4 @@ def main():
     print(f"Output saved to: {OUTPUT_FILE}")
 
 if __name__ == "__main__":
-    main() 
+    main()
