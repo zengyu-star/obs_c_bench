@@ -9,9 +9,9 @@
 * 独立的旁路监控线程（Monitor Thread）每 3 秒无锁采集全局状态，实时输出累计 TPS、带宽与成功率，对发流性能 **0 干扰**。
 
 
-* **确定性伪随机打散 (LCG Hash Naming)**
-* 内置标准 LCG (Linear Congruential Generator) 算法。开启 `ObjNamePatternHash=true` 后，可在对象名前缀生成均匀离散的 Hash 值，**彻底消除云存储底层分片的热点瓶颈**。
-* 算法具备强确定性，确保先执行 PUT 压测后，再次执行 GET 压测能够 100% 精确命中已上传的对象。
+* **确定性极速哈希打散 (High-Performance 128-bit Hash)**
+* 内置高性能 SplitMix64 位混合算法。开启 `ObjNamePatternHash=true` 后，会自动计算出一个 32 位十六进制字符的随机前缀，**彻底消除云存储底层分片的热点瓶颈**。
+* 算法具备极高性能（纳秒级 CPU 混合）与强确定性，确保先执行 PUT 压测后，再次执行 GET 压测能够 100% 精确命中已上传的对象。
 
 
 * **零拷贝异构数据校验 (Zero-Copy Validation)**
@@ -114,7 +114,7 @@ user2, YOUR_AK_2, YOUR_SK_2
 如果需要模拟使用 STS 临时 AK/SK 进行压测，请按照以下步骤配置：
 
 1.  **修改 `users.dat` 格式**：
-    将凭证格式改为 `UserID-UserName-Password,OriginalAK,OriginalSK`。其中 `OriginalAK` 用于计算桶名逻辑。
+    将凭证格式改为 `UserID-AccountName-Password,OriginalAK,OriginalSK`。其中 `OriginalAK` 用于计算桶名逻辑。
 2.  **配置 `config.dat`**：
     设置 `IsTemporaryToken=true`。
 3.  **自动获取凭证**：
