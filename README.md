@@ -109,7 +109,18 @@ user2, YOUR_AK_2, YOUR_SK_2
 
 *(注：详细配置说明请参考 `config.dat` 文件内的中文注释)*
 
-### 3. 执行压测
+### 4. STS 临时凭证模式 (可选)
+
+如果需要模拟使用 STS 临时 AK/SK 进行压测，请按照以下步骤配置：
+
+1.  **修改 `users.dat` 格式**：
+    将凭证格式改为 `UserID-UserName-Password,OriginalAK,OriginalSK`。其中 `OriginalAK` 用于计算桶名逻辑。
+2.  **配置 `config.dat`**：
+    设置 `IsTemporaryToken=true`。
+3.  **自动获取凭证**：
+    工具启动时会自动调用 `python3 generate_temp_ak_sk.py` 获取临时凭证并存入 `temptoken.dat`。
+
+### 5. 执行压测
 
 工具默认读取当前目录下的 `config.dat`：
 
