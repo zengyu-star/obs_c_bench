@@ -1,6 +1,7 @@
 #include "bench.h"
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <stdint.h>
 
 #define PATTERN_BUF_SIZE (1 * 1024 * 1024)
 #define MAX_ROWS_PER_FILE 1000000
@@ -11,6 +12,25 @@ void fill_pattern_buffer(char *buf, size_t size, int seed) {
     const unsigned int C = 1013904223;
     for (size_t i = 0; i < size; i++) {
         buf[i] = (char)((i * A + C + s) % 255);
+    }
+}
+
+// SplitMix64-based kernel: extremely fast, good avalanche properties.
+// Perfect for high-performance key prefix generation.
+static inline uint64_t fast_mix64(uint64_t z) {
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+    return z ^ (z >> 31);
+}
+
+// Ultra-fast u64 to hex using a static lookup table, bypassing snprintf overhead for hex formatting.
+static const char g_hex_lookup[] = "0123456789abcdef";
+static inline void fast_u128_to_hex32(uint64_t v1, uint64_t v2, char *out) {
+    for (int i = 15; i >= 0; i--) {
+        out[i] = g_hex_lookup[v1 & 0xf];
+        v1 >>= 4;
+        out[i + 16] = g_hex_lookup[v2 & 0xf];
+        v2 >>= 4;
     }
 }
 
@@ -117,10 +137,19 @@ void *worker_routine(void *arg) {
 
         char key[MAX_KEY_LEN]; 
         if (args->config->obj_name_pattern_hash) {
-             unsigned int seed_val = (unsigned int)(args->thread_id + object_seq_id);
-             unsigned int lcg_hash = (seed_val * 1103515245 + 12345) & 0x7FFFFFFF;
-             int hash_prefix = lcg_hash % 10000;
-             snprintf(key, sizeof(key), "%04d-%s-%s-%d", hash_prefix, args->username, args->config->key_prefix, args->thread_id);
+             // 1. Combine thread_id and object_seq_id for strong determinism
+             uint64_t seed = ((uint64_t)args->thread_id << 32) ^ (uint64_t)object_seq_id;
+             
+             // 2. Generate two 64-bit blocks for a total of 128 bits (32 hex characters)
+             // Using golden ratio constant to maximize dispersion
+             uint64_t part1 = fast_mix64(seed + 0x9e3779b97f4a7c15ULL);
+             uint64_t part2 = fast_mix64(part1 + 0x9e3779b97f4a7c15ULL);
+
+             char hex_prefix[33];
+             fast_u128_to_hex32(part1, part2, hex_prefix);
+             hex_prefix[32] = '\0';
+
+             snprintf(key, sizeof(key), "%s-%s-%s-%d", hex_prefix, args->username, args->config->key_prefix, args->thread_id);
         } else {
              snprintf(key, sizeof(key), "%s-%s-%d-%lld", args->username, args->config->key_prefix, args->thread_id, object_seq_id);
         }
