@@ -346,10 +346,6 @@ obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str, char 
         return OBS_STATUS_InternalError; 
     }
 
-    if (ctx.ret_status == OBS_STATUS_OK) {
-        args->stats.total_success_bytes += ctx.total_processed;
-    }
-
     return ctx.ret_status;
 }
 
