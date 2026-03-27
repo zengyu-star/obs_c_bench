@@ -44,7 +44,7 @@
 
 * Linux 环境 (CentOS / Ubuntu 等)
 * GCC 编译器 (支持 C99/GNU99 标准)
-* 华为云 OBS C SDK 的lib库，可参考（https://support.huaweicloud.com/sdk-c-devg-obs/obs_20_0004.html）获取。
+* 华为云 OBS C SDK 的lib库，可参考如下链接获取：https://support.huaweicloud.com/sdk-c-devg-obs/obs_20_0004.html
 * Python 3.x 及 `pandas`, `matplotlib` (仅用于后期图表生成)
 
 ### 编译命令
