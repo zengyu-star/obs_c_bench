@@ -202,3 +202,9 @@ void upload_file(const obs_options *options, char *key, server_side_encryption_p
 void initialize_break_point_lock() {}
 void deinitialize_break_point_lock() {}
 
+void create_bucket(const obs_options *options, obs_canned_acl canned_acl, const char *location_constraint, obs_response_handler *handler, void *callback_data) {
+    if (handler->complete_callback) handler->complete_callback(OBS_STATUS_OK, NULL, callback_data);
+}
+void delete_bucket(const obs_options *options, obs_response_handler *handler, void *callback_data) {
+    if (handler->complete_callback) handler->complete_callback(OBS_STATUS_OK, NULL, callback_data);
+}

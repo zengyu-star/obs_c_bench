@@ -22,6 +22,8 @@ ThreadsPerUser=2
 # - 最高优先级: BucketNameFixed (如果不为空，所有请求都强制打向这个桶)
 # - 次优先级: {当前用户AK小写}.{BucketNamePrefix}
 BucketNameFixed=
+# BucketLocation: 桶所在的区域 (例如: cn-north-4)
+BucketLocation=
 BucketNamePrefix=bench.test
 
 # --------------------------------------------------------------

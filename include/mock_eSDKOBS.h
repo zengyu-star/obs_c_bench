@@ -12,6 +12,20 @@ typedef enum { OBS_PROTOCOL_HTTPS = 0, OBS_PROTOCOL_HTTP = 1 } obs_protocol;
 
 typedef enum
 {
+    OBS_CANNED_ACL_PRIVATE                     = 0,
+    OBS_CANNED_ACL_PUBLIC_READ                 = 1,
+    OBS_CANNED_ACL_PUBLIC_READ_WRITE           = 2,
+    OBS_CANNED_ACL_BUTT
+} obs_canned_acl;
+
+typedef struct
+{
+    obs_canned_acl    canned_acl;
+    const char       *location_constraint;   
+} obs_create_bucket_params;
+
+typedef enum
+{
     OBS_STATUS_OK = 0,
     OBS_STATUS_InitCurlFailed,
     OBS_STATUS_InternalError,
@@ -359,7 +373,8 @@ const char* obs_get_status_name(obs_status status);
 void init_obs_options(obs_options *options);
 void init_put_properties(obs_put_properties *options);
 void init_get_properties(obs_get_conditions *options);
-
+void create_bucket(const obs_options *options, obs_canned_acl canned_acl, const char *location_constraint, obs_response_handler *handler, void *callback_data);
+void delete_bucket(const obs_options *options, obs_response_handler *handler, void *callback_data);
 void put_object(const obs_options *options, char *key, uint64_t content_length,
                 obs_put_properties *put_properties, 
                 server_side_encryption_params *encryption_params,

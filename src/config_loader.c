@@ -174,7 +174,8 @@ int load_config(const char *filename, Config *cfg) {
         else if (strcmp(key, "EnableCheckpoint") == 0) cfg->enable_checkpoint = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "UploadFilePath") == 0) strcpy(cfg->upload_file_path, val);
         else if (strcmp(key, "BucketNamePrefix") == 0) strcpy(cfg->bucket_name_prefix, val);
-        else if (strcmp(key, "BucketNameFixed") == 0) strcpy(cfg->bucket_name_fixed, val);
+        else if (strcmp(key, "BucketNameFixed") == 0) strncpy(cfg->bucket_name_fixed, val, sizeof(cfg->bucket_name_fixed)-1);
+        else if (strcmp(key, "BucketLocation") == 0) strncpy(cfg->bucket_location, val, sizeof(cfg->bucket_location)-1);
         else if (strcmp(key, "IsTemporaryToken") == 0) cfg->is_temporary_token = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0);
         else if (strcmp(key, "Users") == 0) cfg->target_user_count = atoi(val);
         else if (strcmp(key, "ThreadsPerUser") == 0) cfg->threads_per_user = atoi(val);

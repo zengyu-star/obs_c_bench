@@ -176,6 +176,12 @@ void *worker_routine(void *arg) {
         int current_http_code = 0;
 
         switch(current_case) {
+            case TEST_CASE_CREATE_BUCKET:
+                status = run_create_bucket_benchmark(args, current_req_id);
+                break;
+            case TEST_CASE_DELETE_BUCKET:
+                status = run_delete_bucket_benchmark(args, current_req_id);
+                break;
             case TEST_CASE_PUT:
                 status = run_put_benchmark(args, key, current_req_size, current_req_id);
                 break;
@@ -209,7 +215,7 @@ void *worker_routine(void *arg) {
 
         if (status == OBS_STATUS_OK) {
             if (current_case == TEST_CASE_GET && selected_range != NULL) current_http_code = 206;
-            else if (current_case == TEST_CASE_DELETE) current_http_code = 204;
+            else if (current_case == TEST_CASE_DELETE || current_case == TEST_CASE_DELETE_BUCKET) current_http_code = 204;
             else current_http_code = 200;
         } else {
             current_http_code = infer_http_code(status);

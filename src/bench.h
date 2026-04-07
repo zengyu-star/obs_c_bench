@@ -26,6 +26,8 @@ extern volatile sig_atomic_t g_graceful_stop;
 #define MAX_KEY_LEN             1025
 
 // TestCase 编号定义
+#define TEST_CASE_CREATE_BUCKET 101
+#define TEST_CASE_DELETE_BUCKET 104
 #define TEST_CASE_PUT           201
 #define TEST_CASE_GET           202
 #define TEST_CASE_DELETE        204
@@ -74,6 +76,7 @@ typedef struct {
     int threads_per_user;
     char bucket_name_prefix[64];
     char bucket_name_fixed[128];
+    char bucket_location[64];
 
     // --- 用户列表 ---
     UserCredential *user_list;
@@ -174,6 +177,8 @@ void save_benchmark_report(Config *cfg, long long total,
                            long long f5xx, long long fother, long long fvalidate,
                            double tps, double throughput);
 
+obs_status run_create_bucket_benchmark(WorkerArgs *args, char *out_req_id);
+obs_status run_delete_bucket_benchmark(WorkerArgs *args, char *out_req_id);
 obs_status run_put_benchmark(WorkerArgs *args, char *key, long long object_size, char *out_req_id);
 obs_status run_get_benchmark(WorkerArgs *args, char *key, char *range_str, char *out_req_id);
 obs_status run_delete_benchmark(WorkerArgs *args, char *key, char *out_req_id);

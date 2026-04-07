@@ -526,3 +526,44 @@ obs_status run_upload_file_benchmark(WorkerArgs *args, char *key, char *out_req_
     return ctx.ret_status;
 }
 
+
+obs_status run_create_bucket_benchmark(WorkerArgs *args, char *out_req_id) {
+    obs_options option;
+    setup_options(&option, args);
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0, {0}};
+    
+    obs_response_handler handler = {0};
+    handler.properties_callback = &response_properties_callback;
+    handler.complete_callback = &response_complete_callback;
+
+    const char *location = NULL;
+    if (strlen(args->config->bucket_location) > 0) {
+        location = args->config->bucket_location;
+    }
+
+    create_bucket(&option, OBS_CANNED_ACL_PRIVATE, location, &handler, &ctx);
+
+    if (out_req_id && strlen(ctx.request_id) > 0) {
+        strcpy(out_req_id, ctx.request_id);
+    }
+    
+    return ctx.ret_status;
+}
+
+obs_status run_delete_bucket_benchmark(WorkerArgs *args, char *out_req_id) {
+    obs_options option;
+    setup_options(&option, args);
+    transfer_context ctx = {args, 0, 0, 0, OBS_STATUS_BUTT, {0}, {0}, {0}, 0, 0, {0}};
+    
+    obs_response_handler handler = {0};
+    handler.properties_callback = &response_properties_callback;
+    handler.complete_callback = &response_complete_callback;
+
+    delete_bucket(&option, &handler, &ctx);
+
+    if (out_req_id && strlen(ctx.request_id) > 0) {
+        strcpy(out_req_id, ctx.request_id);
+    }
+    
+    return ctx.ret_status;
+}
