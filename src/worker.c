@@ -213,6 +213,13 @@ void *worker_routine(void *arg) {
             else current_http_code = 200;
         } else {
             current_http_code = infer_http_code(status);
+            // 只有当服务端返回明确的 5xx 且有 Request ID 时，才计入 5xx 失败
+            // 否则归类为本地/网络类错误 (HTTP Code 改为 0)，避免干扰服务端压测指标
+            if (current_http_code >= 500 && current_http_code < 600) {
+                if (strcmp(current_req_id, "-") == 0 || strlen(current_req_id) == 0) {
+                    current_http_code = 0;
+                }
+            }
         }
 
         if (detail_fp && batch_buffer) {
