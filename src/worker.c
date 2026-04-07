@@ -106,7 +106,7 @@ void *worker_routine(void *arg) {
                  args->config->task_log_dir, args->thread_id, file_part_idx);
         detail_fp = fopen(detail_filename, "w");
         if (detail_fp) {
-            fprintf(detail_fp, "Timestamp(s),OpType,Key,Latency(ms),SDKStatus,HTTPCode,Bytes,RequestID\n");
+            fprintf(detail_fp, "Timestamp(s),OpType,Bucket,Key,Latency(ms),SDKStatus,HTTPCode,Bytes,RequestID\n");
             batch_buffer = (ReqRecord *)malloc(sizeof(ReqRecord) * BATCH_SIZE);
         }
     }
@@ -149,9 +149,9 @@ void *worker_routine(void *arg) {
              fast_u128_to_hex32(part1, part2, hex_prefix);
              hex_prefix[32] = '\0';
 
-             snprintf(key, sizeof(key), "%s-%s-%s-%d", hex_prefix, args->username, args->config->key_prefix, args->thread_id);
+             snprintf(key, sizeof(key), "%s-%s-%s-%d-%lld", hex_prefix, args->config->key_prefix, args->username, args->thread_id, object_seq_id);
         } else {
-             snprintf(key, sizeof(key), "%s-%s-%d-%lld", args->username, args->config->key_prefix, args->thread_id, object_seq_id);
+             snprintf(key, sizeof(key), "%s-%s-%d-%lld", args->config->key_prefix, args->username, args->thread_id, object_seq_id);
         }
 
         long long current_req_size = args->config->is_dynamic_size ? 
@@ -228,8 +228,8 @@ void *worker_routine(void *arg) {
 
             if (batch_count >= BATCH_SIZE) {
                 for (int i = 0; i < batch_count; i++) {
-                    fprintf(detail_fp, "%.3f,%d,%s,%.2f,%d,%d,%lld,%s\n",
-                            batch_buffer[i].timestamp_s, batch_buffer[i].op_type, batch_buffer[i].key,
+                    fprintf(detail_fp, "%.3f,%d,%s,%s,%.2f,%d,%d,%lld,%s\n",
+                            batch_buffer[i].timestamp_s, batch_buffer[i].op_type, args->effective_bucket, batch_buffer[i].key,
                             batch_buffer[i].latency_ms, batch_buffer[i].status_code,
                             batch_buffer[i].http_code, batch_buffer[i].bytes, batch_buffer[i].request_id);
                 }
@@ -241,7 +241,7 @@ void *worker_routine(void *arg) {
                     total_written_rows = 0;
                     snprintf(detail_filename, sizeof(detail_filename), "%s/detail_%d_part%d.csv", args->config->task_log_dir, args->thread_id, file_part_idx);
                     detail_fp = fopen(detail_filename, "w");
-                    if (detail_fp) fprintf(detail_fp, "Timestamp(s),OpType,Key,Latency(ms),SDKStatus,HTTPCode,Bytes,RequestID\n");
+                    if (detail_fp) fprintf(detail_fp, "Timestamp(s),OpType,Bucket,Key,Latency(ms),SDKStatus,HTTPCode,Bytes,RequestID\n");
                 }
             }
         }
@@ -265,8 +265,8 @@ void *worker_routine(void *arg) {
     if (detail_fp) {
         if (batch_buffer && batch_count > 0) {
             for (int i = 0; i < batch_count; i++) {
-                fprintf(detail_fp, "%.3f,%d,%s,%.2f,%d,%d,%lld,%s\n",
-                        batch_buffer[i].timestamp_s, batch_buffer[i].op_type, batch_buffer[i].key,
+                fprintf(detail_fp, "%.3f,%d,%s,%s,%.2f,%d,%d,%lld,%s\n",
+                        batch_buffer[i].timestamp_s, batch_buffer[i].op_type, args->effective_bucket, batch_buffer[i].key,
                         batch_buffer[i].latency_ms, batch_buffer[i].status_code,
                         batch_buffer[i].http_code, batch_buffer[i].bytes, batch_buffer[i].request_id);
             }

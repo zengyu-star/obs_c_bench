@@ -16,7 +16,7 @@ LogLevel=INFO
 # 加载 users.dat 中的前 N 个用户
 Users=1
 # 每个用户启动的线程数 (总线程数 = Users * ThreadsPerUser)
-ThreadsPerUser=1
+ThreadsPerUser=2
 
 # 智能桶名生成规则：
 # - 最高优先级: BucketNameFixed (如果不为空，所有请求都强制打向这个桶)
@@ -34,7 +34,7 @@ TestCase=201
 # RunSeconds: 按时间限制运行 (留空或 0 表示不限时)
 RunSeconds=
 # RequestsPerThread: 按每个线程的请求量限制 (留空或 0 表示不限制)
-RequestsPerThread=1
+RequestsPerThread=1000
 
 # 混合操作配置 (仅在 TestCase=900 或通过 CLI 强制开启混压时生效)
 MixOperation=201,202,204
@@ -59,7 +59,7 @@ Range=
 # 5. 断点续传与数据校验 (File & Validation)
 # --------------------------------------------------------------
 # 开启下载时的数据异构一致性校验 (零拷贝环形缓冲比对)
-EnableDataValidation=false
+EnableDataValidation=true
 
 # 开启 RESUMABLE 上传时的本地文件生成与断点目录开关
 UploadFilePath=./test_data.bin
