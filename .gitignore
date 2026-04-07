@@ -20,6 +20,7 @@ csdk_demo/
 temptoken.dat
 test_data.bin
 users.dat
+users.dat_fix_ak_sk
 users.dat_tmp_cred
 *.dat
 *.bin
