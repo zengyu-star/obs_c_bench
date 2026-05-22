@@ -86,6 +86,11 @@ class BenchmarkTester:
         # 动态修改 Config: 运行时间和 UploadFilePath
         sed_cmds = [
             f"sed -i 's/^RunSeconds=.*/RunSeconds={TEST_DURATION}/g' {CONFIG_FILE}",
+            f"sed -i 's/^ThreadsPerUser=.*/ThreadsPerUser=2/g' {CONFIG_FILE}",
+            f"sed -i 's/^RequestsPerThread=.*/RequestsPerThread=2/g' {CONFIG_FILE}",
+            f"sed -i 's/^Users=.*/Users=1/g' {CONFIG_FILE}",
+            f"sed -i 's/^ConnectTimeoutSec=.*/ConnectTimeoutSec=60/g' {CONFIG_FILE}",
+            f"sed -i 's/^RequestTimeoutSec=.*/RequestTimeoutSec=120/g' {CONFIG_FILE}",
             # 确保 UploadFilePath 指向我们生成的文件
             f"sed -i 's|^UploadFilePath=.*|UploadFilePath={TEST_DATA_FILE}|g' {CONFIG_FILE}",
             f"sed -i 's|^EnableDataValidation=.*|EnableDataValidation={EnableDataValidation}|g' {CONFIG_FILE}"

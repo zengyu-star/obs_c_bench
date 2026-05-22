@@ -26,7 +26,7 @@ ifdef MOCK_SDK_MODE
 else
     # 真实 SDK 模式下链接 eSDKOBS 库
     # 请确保 libeSDKOBS.so 在 ./lib 目录下
-    LDFLAGS += -L./lib -leSDKOBS -Wl,-rpath-link=./lib -Wl,-rpath=./lib -lstdc++ -lm
+    LDFLAGS += -L./lib -leSDKOBS -Wl,-rpath-link=./lib -Wl,-rpath,'$$ORIGIN/lib' -Wl,--disable-new-dtags -lstdc++ -lm
     BUILD_TYPE_MSG += [Real SDK Mode]
 endif
 

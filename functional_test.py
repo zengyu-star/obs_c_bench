@@ -259,16 +259,32 @@ class TestErrorHandling:
 
 class TestAdvancedFeatures:
     def test_fixed_bucket_name(self):
-        valid_bucket = "bench.test"
-        try:
-            with open(USERS_FILE, 'r') as f:
-                for line in f:
-                    if ',' in line:
-                        ak = line.split(',')[1].strip().lower()
-                        valid_bucket = f"{ak}.bench.test"
-                        break
-        except Exception:
-            pass
+        valid_bucket = None
+        # Try to read the original BucketNameFixed from backup config
+        if os.path.exists(CONFIG_BAK):
+            try:
+                with open(CONFIG_BAK, 'r') as f:
+                    for line in f:
+                        if line.strip().startswith("BucketNameFixed="):
+                            val = line.split("=", 1)[1].strip()
+                            if val:
+                                valid_bucket = val
+                                break
+            except Exception:
+                pass
+
+        if not valid_bucket:
+            # Fallback to default naming convention
+            valid_bucket = "bench.test"
+            try:
+                with open(USERS_FILE, 'r') as f:
+                    for line in f:
+                        if ',' in line:
+                            ak = line.split(',')[1].strip().lower()
+                            valid_bucket = f"{ak}.bench.test"
+                            break
+            except Exception:
+                pass
 
         update_config("BucketNameFixed", valid_bucket)
         ret, out = run_cmd(f"{BINARY} 201")

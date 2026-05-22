@@ -5,8 +5,8 @@
 # --------------------------------------------------------------
 # 1. 环境与基础网络配置 (Environment & Network)
 # --------------------------------------------------------------
-Endpoint=obs.ap-southeast-1.myhuaweicloud.com
-Protocol=https
+Endpoint=obs.ap-southeast-3.myhuaweicloud.com
+Protocol=http
 KeepAlive=true
 LogLevel=INFO
 
@@ -21,9 +21,9 @@ ThreadsPerUser=2
 # 智能桶名生成规则：
 # - 最高优先级: BucketNameFixed (如果不为空，所有请求都强制打向这个桶)
 # - 次优先级: {当前用户AK小写}.{BucketNamePrefix}
-BucketNameFixed=
+BucketNameFixed=zy-bucket-sgp
 # BucketLocation: 桶所在的区域 (例如: cn-north-4)
-BucketLocation=
+BucketLocation=ap-southeast-3
 BucketNamePrefix=bench.test
 
 # --------------------------------------------------------------
@@ -34,9 +34,9 @@ TestCase=201
 
 # 退出条件配置 (二选一，如果都配置则谁先满足谁退出)
 # RunSeconds: 按时间限制运行 (留空或 0 表示不限时)
-RunSeconds=
+RunSeconds=0
 # RequestsPerThread: 按每个线程的请求量限制 (留空或 0 表示不限制)
-RequestsPerThread=1000
+RequestsPerThread=5
 
 # 混合操作配置 (仅在 TestCase=900 或通过 CLI 强制开启混压时生效)
 MixOperation=201,202,204
@@ -61,7 +61,7 @@ Range=
 # 5. 断点续传与数据校验 (File & Validation)
 # --------------------------------------------------------------
 # 开启下载时的数据异构一致性校验 (零拷贝环形缓冲比对)
-EnableDataValidation=true
+EnableDataValidation=false
 
 # 开启 RESUMABLE 上传时的本地文件生成与断点目录开关
 UploadFilePath=./test_data.bin
@@ -101,8 +101,8 @@ EnableDetailLog=true
 # 8. 防卡死超时设置
 # --------------------------------------------------------------
 # 防卡死超时设置 (秒)
-ConnectTimeoutSec=
-RequestTimeoutSec=
+ConnectTimeoutSec=60
+RequestTimeoutSec=120
 
 # --------------------------------------------------------------
 # 9. 是否启用 STS 临时安全凭证模式 (true/false)
